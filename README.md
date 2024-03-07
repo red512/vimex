@@ -52,6 +52,19 @@ https://github.com/red512/vimex-gitops
 
 <img width="1110" alt="image" src="https://github.com/red512/vimex/assets/59205478/75a51295-3229-4691-83b8-db2f061cfac2">
 
+### Application Helm chart overview
+
+```
+.
+├── Chart.yaml
+├── templates
+│   ├── deployment.yaml
+│   ├── hpa.yaml
+│   ├── namespace.yaml
+│   ├── sealed-secret.yaml
+│   └── service.yaml
+└── values.yaml
+```
 
 ### Deployments
 
@@ -63,7 +76,7 @@ https://github.com/red512/vimex-gitops
 
 ### Secrets
 
-> Sealed Secrets encrypts Kubernetes Secrets into SealedSecret resources, ensuring secure storage and transmission. These encrypted secrets can be safely stored in public repositories, with decryption occurring exclusively within the Kubernetes cluster by the Sealed Secrets controller. You can use next commands:
+> Sealed Secrets encrypts Kubernetes Secrets into SealedSecret resources, ensuring secure storage and transmission. These encrypted secrets can be safely stored in public repositories, with decryption occurring exclusively within the Kubernetes cluster by the Sealed Secrets controller. The encrypted secret will be stored in `sealed-secret.yaml`. You can use the next commands:
 
 ```
 kubectl create secret generic api-key -n backend --from-literal=API-KEY=<api-key-example> --dry-run=client -o yaml > secret.yaml
@@ -71,7 +84,6 @@ kubectl create secret generic api-key -n backend --from-literal=API-KEY=<api-key
 ```
 kubeseal --controller-name selead-secrets-release-sealed-secrets --controller-namespace kube-system --format yaml < secret.yaml > sealed-secret.yaml
 ```
-
 
 ### CI Details
 
