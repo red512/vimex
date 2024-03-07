@@ -9,7 +9,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/red512/bidip-gitops
+    repoURL: https://github.com/red512/vimex-gitops
     targetRevision: HEAD
     path: gitops/environments/staging/apps
   destination:
