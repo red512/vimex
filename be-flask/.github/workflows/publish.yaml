@@ -1,0 +1,16 @@
+name: Publish image to Docker Hub
+on:
+  [workflow_dispatch]
+jobs:
+  publish_image:
+    runs-on: ubuntu-latest 
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+      - name: build 
+        run: |
+          docker build -t projectred521/tsunami:latest tsunami-security-scanner-master/.
+      - name: publish 
+        run: |
+          docker login -u projectred521 -p ${{ secrets.DOCKER_HUB_TOKEN }}
+          docker push projectred521/tsunami:latest

@@ -1,0 +1,60 @@
+name: CI Tests BE
+
+on:
+  push:
+    branches:
+      - 'main'
+    paths:
+      - 'be-flask/**'
+  workflow_dispatch:  # This event allows manual triggering
+  pull_request:
+    branches:
+      - 'main'
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      API_KEY: ${{ secrets.API_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r be-flask/requirements.txt
+
+      - name: Start Server
+        run: |
+          python be-flask/app.py &  # Start the server in the background
+          sleep 5  # Give the server some time to start (adjust as needed)
+
+      - name: Run integration tests
+        run: |
+          python be-flask/test_integration.py
+
+      - name: Run unit tests
+        run: |
+          python be-flask/test_unit.py
+
+      - name: Stop Server
+        run: |
+          pkill -f app.py  # Stop the server gracefully
+
+      - name: Notify on success
+        if: success()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"The BE tests are succeeded for ${{ github.repository }} :rocket:"}' ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"The BE tests are failed for ${{ github.repository }} :x:"}' ${{ secrets.SLACK_WEBHOOK_URL }}
+

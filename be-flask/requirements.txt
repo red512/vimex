@@ -1,0 +1,6 @@
+# Flask==2.0.1
+Flask
+Flask-Cors>=3.0  
+requests==2.26.0  
+unittest2==1.1.0 
+
