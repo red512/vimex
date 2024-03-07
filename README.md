@@ -78,9 +78,10 @@ https://github.com/red512/vimex-gitops
 ### Deployments
 
 > The deployments done with ArgoCD.
-
+- APPS-STAGING
 ![image](https://github.com/red512/vimex/assets/59205478/d182fc5a-0b4a-4869-842d-44538620348d)
 >
+- BACKEND APP
 ![image](https://github.com/red512/vimex/assets/59205478/0655ce87-bc71-4922-842f-5688685588a1)
 
 
