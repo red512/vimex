@@ -98,6 +98,9 @@ This GitHub Action automates testing for backend and responds to various events:
 
 For Slack notifications, set up the Slack webhook URL as a secret in your repository.
 
+![image](https://github.com/red512/vimex/assets/59205478/8b30bd4f-bd1a-4413-bcdb-dc782c1b0cea)
+
+
 ### Publish Workflows
 
 These GitHub Actions manage the image publication for backend components in the project. Depending on the context, the workflows respond to various events:
