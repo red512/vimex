@@ -49,7 +49,7 @@ https://github.com/red512/vimex-gitops
 ### k8s cluster
 
 > Here I used EKS cluster that was created in Terraform but you can use any cloud provider or work with minikube.
-> In this example I used AWS and also left commented out part for minikube usage.
+> In this example I used AWS and also left commented out the part for minikube usage.
 
 ```
 # provider "helm" {
