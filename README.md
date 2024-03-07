@@ -3,7 +3,8 @@
 
 > The provided Flask backend sets up a single route at the root URL, uses https://openweathermap.org/api, and allows us to see weather data in New York. The backend utilizes CORS to enable cross-origin requests.
 
-<img width="1638" alt="image" src="https://github.com/red512/vimex/assets/59205478/74f22c7d-b20f-423b-8a58-1779cf277485">
+<img width="1636" alt="image" src="https://github.com/red512/vimex/assets/59205478/33887bfe-0b97-440b-ac41-78114764654a">
+
 
 ### Prerequisites
 
