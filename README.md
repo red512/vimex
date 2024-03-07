@@ -50,6 +50,14 @@ https://github.com/red512/vimex-gitops
 > Here I used EKS cluster that was created in Terraform but you can use any cloud provider or work with minikube.
 > In this example I used AWS and also left commented out part for minikube usage.
 
+```
+# provider "helm" {
+#   kubernetes {
+#     config_path = "~/.kube/config"
+#   }
+# }
+```
+
 <img width="1110" alt="image" src="https://github.com/red512/vimex/assets/59205478/75a51295-3229-4691-83b8-db2f061cfac2">
 
 ### Application Helm chart overview
