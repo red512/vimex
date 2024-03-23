@@ -1,9 +1,10 @@
-### vimex
+## VIMEX
 ### Description of the deployed app
 
 > The provided Flask backend sets up a single route at the root URL, uses https://openweathermap.org/api, and allows us to see weather data in New York. The backend utilizes CORS to enable cross-origin requests.
 
-<img width="1638" alt="image" src="https://github.com/red512/vimex/assets/59205478/74f22c7d-b20f-423b-8a58-1779cf277485">
+<img width="1634" alt="image" src="https://github.com/red512/vimex/assets/59205478/0a4b8c01-5583-453d-b74f-fd26990bd7f2">
+
 
 ### Prerequisites
 
@@ -48,7 +49,7 @@ https://github.com/red512/vimex-gitops
 ### k8s cluster
 
 > Here I used EKS cluster that was created in Terraform but you can use any cloud provider or work with minikube.
-> In this example I used AWS and also left commented out part for minikube usage.
+> In this example I used AWS and also left commented out the part for minikube usage.
 
 ```
 # provider "helm" {
@@ -77,6 +78,13 @@ https://github.com/red512/vimex-gitops
 ### Deployments
 
 > The deployments done with ArgoCD.
+- APPS-STAGING
+![image](https://github.com/red512/vimex/assets/59205478/d182fc5a-0b4a-4869-842d-44538620348d)
+>
+- BACKEND APP
+![image](https://github.com/red512/vimex/assets/59205478/0655ce87-bc71-4922-842f-5688685588a1)
+
+
 
 ### Github actions
 
