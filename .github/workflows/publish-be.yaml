@@ -2,6 +2,12 @@ name: Publish BE
 
 on:
   workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for running workflow'
+        required: false
+        default: 'Manual trigger'
+        type: string
   push:
     branches:
       - 'main'
@@ -47,4 +53,3 @@ jobs:
 
 
 
-          
