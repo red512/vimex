@@ -1,5 +1,7 @@
 name: CI Tests BE with Security
 
+run-name: Security Tests - ${{ github.event_name }} on ${{ github.ref_name }}
+
 on:
   push:
     branches:
