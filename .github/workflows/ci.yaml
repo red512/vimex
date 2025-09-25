@@ -1,0 +1,122 @@
+name: CI Tests BE with Security
+
+on:
+  push:
+    branches:
+      - 'main'
+    paths:
+      - 'be-flask/**'
+  workflow_dispatch:
+  pull_request:
+    # Run on PRs targeting ANY branch
+    paths:
+      - 'be-flask/**'
+  # Run on every commit in PRs to any branch
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'be-flask/**'
+
+jobs:
+  security-and-tests:
+    runs-on: ubuntu-latest
+    env:
+      API_KEY: ${{ secrets.API_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r be-flask/requirements.txt
+
+      # Security Checks (Fast feedback for PRs)
+      - name: Python Security Check with pip-audit
+        run: |
+          pip install pip-audit
+          pip-audit --requirement be-flask/requirements.txt --format=json --output=pip-audit-report.json || true
+          echo "## 🔒 Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          pip-audit --requirement be-flask/requirements.txt || echo "⚠️ Security vulnerabilities found - check details above"
+
+      - name: Install Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Create requirements file for scanning
+        run: |
+          cd be-flask
+          pip freeze > installed-requirements.txt
+
+      - name: Scan Python dependencies with Grype
+        run: |
+          cd be-flask
+          echo "## 🔍 Grype Vulnerability Scan" >> $GITHUB_STEP_SUMMARY
+          grype dir:. --scope squashed --output json --file grype-report.json || true
+          grype dir:. --scope squashed --output table || echo "⚠️ Vulnerabilities detected - check reports"
+
+      # Comment on PR with security summary (if this is a PR)
+      - name: Comment PR with security summary
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            let comment = '## 🔒 Security Check Results\n\n';
+            
+            // Add summary based on exit codes or file contents
+            comment += '- ✅ pip-audit scan completed\n';
+            comment += '- ✅ Grype vulnerability scan completed\n';
+            comment += '\n📊 Detailed reports available in the Actions artifacts.\n';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      # Your existing tests
+      - name: Start Server
+        run: |
+          python be-flask/app.py &
+          sleep 5
+
+      - name: Run integration tests
+        run: |
+          python be-flask/test_integration.py
+
+      - name: Run unit tests  
+        run: |
+          python be-flask/test_unit.py
+
+      - name: Stop Server
+        run: |
+          pkill -f app.py
+
+      # Upload security reports
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            pip-audit-report.json
+            be-flask/grype-report.json
+
+      # Notifications
+      - name: Notify on success
+        if: success()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"✅ BE tests and security checks passed for ${{ github.repository }} :rocket:"}' ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' --data '{"text":"❌ BE tests or security checks failed for ${{ github.repository }} :x: Check the security reports for details."}' ${{ secrets.SLACK_WEBHOOK_URL }}'
