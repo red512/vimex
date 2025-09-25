@@ -121,3 +121,5 @@ jobs:
         if: failure()
         run: |
           curl -X POST -H 'Content-type: application/json' --data '{"text":"❌ BE tests or security checks failed for ${{ github.repository }} :x: Check the security reports for details."}' ${{ secrets.SLACK_WEBHOOK_URL }}'
+
+          
