@@ -43,12 +43,14 @@ jobs:
           echo "Starting pip-audit security scan..."
           echo "## 🔒 pip-audit Security Scan Results" >> $GITHUB_STEP_SUMMARY
           
-          # Run pip-audit and capture results
-          if pip-audit --requirement be-flask/requirements.txt --format=table; then
+          # Run pip-audit with correct format (no table option, just default output)
+          if pip-audit --requirement be-flask/requirements.txt; then
             echo "✅ No vulnerabilities found by pip-audit" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Vulnerabilities detected by pip-audit:" >> $GITHUB_STEP_SUMMARY
-            pip-audit --requirement be-flask/requirements.txt --format=table >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            pip-audit --requirement be-flask/requirements.txt >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
           
           # Always generate JSON report
