@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'main'
+      - 'develop3'
     paths:
       - 'be-flask/**'
   workflow_dispatch:
