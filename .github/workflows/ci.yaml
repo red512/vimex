@@ -82,7 +82,8 @@ jobs:
           else
             echo "⚠️ Found $VULN_COUNT vulnerabilities by Grype:" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grype dir:. --scope squashed --output table --quiet >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            # Use --by-cve flag to show CVE numbers instead of GHSA IDs
+            grype dir:. --scope squashed --output table --by-cve --quiet >> $GITHUB_STEP_SUMMARY 2>&1 || true
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
