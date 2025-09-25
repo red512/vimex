@@ -71,18 +71,20 @@ jobs:
           echo "Starting Grype vulnerability scan..."
           echo "## 🔍 Grype Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
           
-          # Run Grype and capture output to summary
-          if grype dir:. --scope squashed --output table --quiet; then
+          # Run Grype and check the JSON output for matches
+          grype dir:. --scope squashed --output json --file grype-report.json || true
+          
+          # Check if vulnerabilities were found by parsing JSON
+          VULN_COUNT=$(cat grype-report.json | jq '.matches | length' 2>/dev/null || echo "0")
+          
+          if [ "$VULN_COUNT" -eq 0 ]; then
             echo "✅ No vulnerabilities found by Grype" >> $GITHUB_STEP_SUMMARY
           else
-            echo "⚠️ Vulnerabilities detected by Grype:" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ Found $VULN_COUNT vulnerabilities by Grype:" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             grype dir:. --scope squashed --output table --quiet >> $GITHUB_STEP_SUMMARY 2>&1 || true
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
-          
-          # Always generate JSON report
-          grype dir:. --scope squashed --output json --file grype-report.json || true
 
       # Comment on PR with security summary
       - name: Comment PR with security summary
