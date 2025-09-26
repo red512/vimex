@@ -83,12 +83,12 @@ jobs:
           pip install pip-audit
           echo "## 🔒 pip-audit Security Scan Results" >> $GITHUB_STEP_SUMMARY
           
-          if pip-audit --requirement be-flask/requirements.txt --format=table; then
+          if pip-audit --requirement be-flask/requirements.txt; then
             echo "✅ No vulnerabilities found by pip-audit" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Vulnerabilities detected by pip-audit:" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            pip-audit --requirement be-flask/requirements.txt --format=table >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            pip-audit --requirement be-flask/requirements.txt >> $GITHUB_STEP_SUMMARY 2>&1 || true
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
           
