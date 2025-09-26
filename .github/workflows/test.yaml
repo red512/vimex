@@ -1,0 +1,66 @@
+name: Tests
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types: [completed]
+    branches: ['main', 'develop*']
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    env:
+      API_KEY: ${{ secrets.API_KEY }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r be-flask/requirements.txt
+
+      - name: Run unit tests
+        id: unit-tests
+        run: |
+          echo "Running unit tests..."
+          python be-flask/test_unit.py
+
+      - name: Start server for integration tests
+        run: |
+          python be-flask/app.py &
+          sleep 5
+
+      - name: Run integration tests
+        id: integration-tests
+        run: |
+          echo "Running integration tests..."
+          python be-flask/test_integration.py
+
+      - name: Stop server
+        if: always()
+        run: pkill -f app.py || true
+
+      - name: Notify test results
+        if: always()
+        run: |
+          UNIT_STATUS="${{ steps.unit-tests.outcome }}"
+          INTEGRATION_STATUS="${{ steps.integration-tests.outcome }}"
+          
+          if [[ "$UNIT_STATUS" == "success" && "$INTEGRATION_STATUS" == "success" ]]; then
+            STATUS="PASSED"
+            EMOJI="✅"
+          else
+            STATUS="FAILED"
+            EMOJI="❌"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"$EMOJI Tests $STATUS for ${{ github.repository }} (${{ github.ref_name }})\nUnit: $UNIT_STATUS | Integration: $INTEGRATION_STATUS\"}" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}

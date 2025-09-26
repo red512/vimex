@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches: ['main', 'develop*']
+    paths: ['be-flask/**']
+  pull_request:
+    paths: ['be-flask/**']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      build-success: ${{ steps.build.outcome }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        id: build
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r be-flask/requirements.txt
+          pip freeze > build-requirements.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.run_number }}
+          path: build-requirements.txt
+
+      - name: Notify build status
+        run: |
+          STATUS="${{ steps.build.outcome == 'success' && 'PASSED' || 'FAILED' }}"
+          EMOJI="${{ steps.build.outcome == 'success' && '✅' || '❌' }}"
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"$EMOJI Build $STATUS for ${{ github.repository }} (${{ github.ref_name }})\"}" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
