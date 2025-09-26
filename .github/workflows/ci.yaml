@@ -81,13 +81,15 @@ jobs:
       - name: pip-audit security scan
         run: |
           pip install pip-audit
-          echo "## 🔒 pip-audit Security Scan" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔒 pip-audit Security Scan Results" >> $GITHUB_STEP_SUMMARY
           
-          if pip-audit --requirement be-flask/requirements.txt; then
+          if pip-audit --requirement be-flask/requirements.txt --format=table; then
             echo "✅ No vulnerabilities found by pip-audit" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Vulnerabilities detected by pip-audit:" >> $GITHUB_STEP_SUMMARY
-            pip-audit --requirement be-flask/requirements.txt >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            pip-audit --requirement be-flask/requirements.txt --format=table >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
           
           pip-audit --requirement be-flask/requirements.txt --format=json --output=pip-audit-report.json || true
@@ -97,7 +99,7 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
           cd be-flask && pip freeze > installed-requirements.txt
           
-          echo "## 🔍 Grype Vulnerability Scan" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔍 Grype Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
           grype dir:. --output json --file grype-report.json || true
           
           VULN_COUNT=$(cat grype-report.json | jq '.matches | length' 2>/dev/null || echo "0")
@@ -105,7 +107,9 @@ jobs:
             echo "✅ No vulnerabilities found by Grype" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Found $VULN_COUNT vulnerabilities by Grype:" >> $GITHUB_STEP_SUMMARY
-            grype dir:. --by-cve >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grype dir:. --by-cve --output table >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Generate security summary
