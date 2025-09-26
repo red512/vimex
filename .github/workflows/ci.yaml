@@ -136,17 +136,27 @@ jobs:
             be-flask/installed-requirements.txt
           retention-days: 30
 
+      # Generate security summary for Slack
+      - name: Generate security summary
+        run: |
+          # Count vulnerabilities from reports
+          PIP_AUDIT_VULNS=$(cat pip-audit-report.json | jq '.dependencies | map(.vulns | length) | add' 2>/dev/null || echo "0")
+          GRYPE_VULNS=$(cat be-flask/grype-report.json | jq '.matches | length' 2>/dev/null || echo "0")
+          
+          # Create summary
+          echo "SECURITY_SUMMARY=Security Scan Results: pip-audit found ${PIP_AUDIT_VULNS} vulnerabilities, Grype found ${GRYPE_VULNS} vulnerabilities" >> $GITHUB_ENV
+
       # Notifications
       - name: Notify on success
         if: success()
         run: |
           curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"✅ BE tests and security checks PASSED for ${{ github.repository }} on branch ${{ github.ref_name }} 🚀\"}" \
+            --data "{\"text\":\"✅ BE tests and security checks PASSED for ${{ github.repository }} on branch ${{ github.ref_name }}\n${{ env.SECURITY_SUMMARY }}\"}" \
             ${{ secrets.SLACK_WEBHOOK_URL }}
 
       - name: Notify on failure  
         if: failure()
         run: |
           curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"❌ BE tests or security checks FAILED for ${{ github.repository }} on branch ${{ github.ref_name }} - Check security reports for details\"}" \
+            --data "{\"text\":\"❌ BE tests or security checks FAILED for ${{ github.repository }} on branch ${{ github.ref_name }}\n${{ env.SECURITY_SUMMARY }}\nCheck security reports for details\"}" \
             ${{ secrets.SLACK_WEBHOOK_URL }}
