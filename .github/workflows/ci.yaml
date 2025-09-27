@@ -127,27 +127,52 @@ jobs:
     steps:
       - name: Send notification
         run: |
-          # Simple status check
-          if [[ "${{ needs.build.result }}" == "success" && "${{ needs.test.result }}" == "success" && "${{ needs.security.result }}" == "success" ]]; then
-            if [[ "${{ needs.security.outputs.has-vulnerabilities }}" == "true" ]]; then
-              STATUS="Tests passed - Security vulnerabilities found"
-              EMOJI="⚠️"
-            else
-              STATUS="All checks passed"
-              EMOJI="✅"
-            fi
+          # Determine individual statuses
+          BUILD_OK=$([[ "${{ needs.build.result }}" == "success" ]] && echo "true" || echo "false")
+          TEST_OK=$([[ "${{ needs.test.result }}" == "success" ]] && echo "true" || echo "false")
+          SECURITY_OK=$([[ "${{ needs.security.result }}" == "success" ]] && echo "true" || echo "false")
+          HAS_VULNS="${{ needs.security.outputs.has-vulnerabilities }}"
+          
+          # Build status lines
+          if [[ "$TEST_OK" == "true" ]]; then
+            TEST_LINE="**Tests:** ✅ Passed"
           else
-            STATUS="Pipeline failed"
-            EMOJI="❌"
+            TEST_LINE="**Tests:** ❌ Failed"
           fi
           
+          if [[ "$SECURITY_OK" == "true" && "$HAS_VULNS" != "true" ]]; then
+            SECURITY_LINE="**Security:** ✅ Clean"
+          elif [[ "$SECURITY_OK" == "true" && "$HAS_VULNS" == "true" ]]; then
+            SECURITY_LINE="**Security:** ⚠️ Vulnerabilities detected"
+          else
+            SECURITY_LINE="**Security:** ❌ Scan failed"
+          fi
+          
+          # Overall status
+          if [[ "$BUILD_OK" == "true" && "$TEST_OK" == "true" && "$SECURITY_OK" == "true" ]]; then
+            if [[ "$HAS_VULNS" == "true" ]]; then
+              HEADER="⚠️ Tests passed - Security vulnerabilities found for ${{ github.repository }} (${{ github.ref_name }})"
+            else
+              HEADER="✅ All checks passed for ${{ github.repository }} (${{ github.ref_name }})"
+            fi
+          else
+            HEADER="❌ Pipeline failed for ${{ github.repository }} (${{ github.ref_name }})"
+          fi
+          
+          # Add release info for main branch
           if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ needs.release.result }}" == "success" ]]; then
-            STATUS="$STATUS - New version released"
-            EMOJI="🚀"
+            HEADER="🚀 ${HEADER#* } - New version released"
+            RELEASE_LINE="\\n**Release:** ✅ Version bumped"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" && "${{ needs.release.result }}" == "failure" ]]; then
+            RELEASE_LINE="\\n**Release:** ❌ Failed"
+          else
+            RELEASE_LINE=""
           fi
           
           WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
+          MESSAGE="$HEADER\\n$TEST_LINE\\n$SECURITY_LINE$RELEASE_LINE\\n<$WORKFLOW_URL|View Pipeline Details>"
+          
           curl -X POST -H 'Content-type: application/json' \
-            --data "{\"text\":\"$EMOJI $STATUS for ${{ github.repository }} (${{ github.ref_name }})\\n<$WORKFLOW_URL|View Details>\"}" \
+            --data "{\"text\":\"$MESSAGE\"}" \
             ${{ secrets.SLACK_WEBHOOK_URL }}
