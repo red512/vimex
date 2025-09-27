@@ -31,18 +31,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Fetch latest version
-        id: fetch_version
-        run: |
-          # Try to get the latest tag, if it exists
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          # Remove 'v' prefix and store in version.txt if it doesn't exist
-          CURRENT_VERSION=${LATEST_TAG#v}
-          if [ ! -f be-flask/version.txt ]; then
-            echo "$CURRENT_VERSION" > be-flask/version.txt
-          fi
-          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-
       - name: Bump version
         id: bump
         run: |
@@ -65,33 +53,12 @@ jobs:
           echo "$NEW_VERSION" > be-flask/version.txt
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           
-          # Configure git
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
-          # Stage, commit, and push changes
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
           git add be-flask/version.txt
           git commit -m "chore: release v$NEW_VERSION [skip ci]" || exit 0
-          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
-          
-          # Try to push with retries for race conditions
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if git push origin main --tags; then
-              break
-            fi
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              git pull --rebase origin main
-              sleep 5
-            fi
-          done
-          
-          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-            echo "Failed to push after $MAX_RETRIES attempts"
-            exit 1
-          fi
+          git tag "v$NEW_VERSION"
+          git push origin main --tags
 
   build-and-push:
     needs: version-bump
