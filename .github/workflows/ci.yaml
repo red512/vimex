@@ -1,34 +1,47 @@
-name: CI Tests BE with Security
+name: Complete Pipeline
 
 on:
   push:
-    branches:
-      - 'main'
-    paths:
-      - 'be-flask/**'
-  workflow_dispatch:
+    branches: ['main', 'develop*']
+    paths: ['be-flask/**']
   pull_request:
-    # Run on PRs targeting ANY branch
-    paths:
-      - 'be-flask/**'
-  # Run on every commit in PRs to any branch
-  pull_request_target:
-    types: [opened, synchronize, reopened]
-    paths:
-      - 'be-flask/**'
+    paths: ['be-flask/**']
+  workflow_dispatch:
 
 jobs:
-  security-and-tests:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      build-success: ${{ steps.build.outcome }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        id: build
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r be-flask/requirements.txt
+          pip freeze > build-requirements.txt
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.run_number }}
+          path: build-requirements.txt
+
+  test:
+    needs: build
     runs-on: ubuntu-latest
     env:
       API_KEY: ${{ secrets.API_KEY }}
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.8'
 
@@ -37,86 +50,164 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r be-flask/requirements.txt
 
-      # Security Checks (Fast feedback for PRs)
-      - name: Python Security Check with pip-audit
-        run: |
-          pip install pip-audit
-          pip-audit --requirement be-flask/requirements.txt --format=json --output=pip-audit-report.json || true
-          echo "## 🔒 Security Scan Results" >> $GITHUB_STEP_SUMMARY
-          pip-audit --requirement be-flask/requirements.txt || echo "⚠️ Security vulnerabilities found - check details above"
-
-      - name: Install Grype
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
-
-      - name: Create requirements file for scanning
-        run: |
-          cd be-flask
-          pip freeze > installed-requirements.txt
-
-      - name: Scan Python dependencies with Grype
-        run: |
-          cd be-flask
-          echo "## 🔍 Grype Vulnerability Scan" >> $GITHUB_STEP_SUMMARY
-          grype dir:. --scope squashed --output json --file grype-report.json || true
-          grype dir:. --scope squashed --output table || echo "⚠️ Vulnerabilities detected - check reports"
-
-      # Comment on PR with security summary (if this is a PR)
-      - name: Comment PR with security summary
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-            let comment = '## 🔒 Security Check Results\n\n';
-            
-            // Add summary based on exit codes or file contents
-            comment += '- ✅ pip-audit scan completed\n';
-            comment += '- ✅ Grype vulnerability scan completed\n';
-            comment += '\n📊 Detailed reports available in the Actions artifacts.\n';
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
-
-      # Your existing tests
-      - name: Start Server
-        run: |
-          python be-flask/app.py &
-          sleep 5
+      - name: Run unit tests
+        run: python be-flask/test_unit.py
 
       - name: Run integration tests
         run: |
+          python be-flask/app.py &
+          sleep 5
           python be-flask/test_integration.py
+          pkill -f app.py || true
 
-      - name: Run unit tests  
+  security:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      pip-vulns: ${{ steps.summary.outputs.pip_vulns }}
+      grype-vulns: ${{ steps.summary.outputs.grype_vulns }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
         run: |
-          python be-flask/test_unit.py
+          python -m pip install --upgrade pip
+          pip install -r be-flask/requirements.txt
 
-      - name: Stop Server
+      - name: pip-audit security scan
         run: |
-          pkill -f app.py
+          pip install pip-audit
+          echo "## 🔒 pip-audit Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          
+          if pip-audit --requirement be-flask/requirements.txt; then
+            echo "✅ No vulnerabilities found by pip-audit" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Vulnerabilities detected by pip-audit:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            pip-audit --requirement be-flask/requirements.txt >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          pip-audit --requirement be-flask/requirements.txt --format=json --output=pip-audit-report.json || true
 
-      # Upload security reports
+      - name: Grype vulnerability scan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          cd be-flask && pip freeze > installed-requirements.txt
+          
+          echo "## 🔍 Grype Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
+          grype dir:. --output json --file grype-report.json || true
+          
+          VULN_COUNT=$(cat grype-report.json | jq '.matches | length' 2>/dev/null || echo "0")
+          if [ "$VULN_COUNT" -eq 0 ]; then
+            echo "✅ No vulnerabilities found by Grype" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Found $VULN_COUNT vulnerabilities by Grype:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grype dir:. --by-cve --output table >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Generate security summary
+        id: summary
+        run: |
+          PIP_VULNS=$(cat pip-audit-report.json | jq '.dependencies | map(.vulns | length) | add' 2>/dev/null || echo "0")
+          GRYPE_VULNS=$(cat be-flask/grype-report.json | jq '.matches | length' 2>/dev/null || echo "0")
+          echo "pip_vulns=$PIP_VULNS" >> $GITHUB_OUTPUT
+          echo "grype_vulns=$GRYPE_VULNS" >> $GITHUB_OUTPUT
+          echo "Debug: PIP_VULNS=$PIP_VULNS, GRYPE_VULNS=$GRYPE_VULNS"
+
       - name: Upload security reports
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: security-reports
+          name: security-reports-${{ github.run_number }}
           path: |
             pip-audit-report.json
             be-flask/grype-report.json
+            be-flask/installed-requirements.txt
 
-      # Notifications
-      - name: Notify on success
-        if: success()
-        run: |
-          curl -X POST -H 'Content-type: application/json' --data '{"text":"✅ BE tests and security checks passed for ${{ github.repository }} :rocket:"}' ${{ secrets.SLACK_WEBHOOK_URL }}
+  release:
+    needs: security
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Notify on failure
-        if: failure()
+      - name: Get current version
+        id: current_version
         run: |
-          curl -X POST -H 'Content-type: application/json' --data '{"text":"❌ BE tests or security checks failed for ${{ github.repository }} :x: Check the security reports for details."}' ${{ secrets.SLACK_WEBHOOK_URL }}'
+          if [ ! -f be-flask/version.txt ]; then
+            echo "1.0.0" > be-flask/version.txt
+          fi
+          echo "version=$(cat be-flask/version.txt)" >> $GITHUB_OUTPUT
+
+      - name: Bump version
+        id: bump
+        run: |
+          CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
+          IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
+          NEW_VERSION="$major.$minor.$((patch + 1))"
+          
+          echo "$NEW_VERSION" > be-flask/version.txt
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create release
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          
+          if git tag -l | grep -q "^v$NEW_VERSION$"; then
+            echo "Tag v$NEW_VERSION already exists"
+            exit 0
+          fi
+          
+          git add be-flask/version.txt
+          git commit -m "chore: release v$NEW_VERSION [skip ci]"
+          git tag "v$NEW_VERSION"
+          git push origin main --tags
+
+  notify:
+    needs: [build, test, security, release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify pipeline status
+        run: |
+          BUILD_STATUS="${{ needs.build.result }}"
+          TEST_STATUS="${{ needs.test.result }}"
+          SECURITY_STATUS="${{ needs.security.result }}"
+          RELEASE_STATUS="${{ needs.release.result }}"
+          
+          PIP_VULNS="${{ needs.security.outputs.pip-vulns || '0' }}"
+          GRYPE_VULNS="${{ needs.security.outputs.grype-vulns || '0' }}"
+          
+          if [[ "$BUILD_STATUS" == "success" && "$TEST_STATUS" == "success" && "$SECURITY_STATUS" == "success" ]]; then
+            if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+              STATUS="PIPELINE COMPLETED"
+              EMOJI="🚀"
+              DETAILS="Build: ✅ | Tests: ✅ | Security: ✅ | Release: $([[ "$RELEASE_STATUS" == "success" ]] && echo "✅" || echo "⚠️")"
+            else
+              STATUS="TESTS PASSED"
+              EMOJI="✅"
+              DETAILS="Build: ✅ | Tests: ✅ | Security: ✅"
+            fi
+          else
+            STATUS="PIPELINE FAILED"
+            EMOJI="❌"
+            DETAILS="Build: $([[ "$BUILD_STATUS" == "success" ]] && echo "✅" || echo "❌") | Tests: $([[ "$TEST_STATUS" == "success" ]] && echo "✅" || echo "❌") | Security: $([[ "$SECURITY_STATUS" == "success" ]] && echo "✅" || echo "❌")"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"$EMOJI $STATUS for ${{ github.repository }} (${{ github.ref_name }})\n$DETAILS\nSecurity: pip-audit found $PIP_VULNS, Grype found $GRYPE_VULNS vulnerabilities\"}" \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
