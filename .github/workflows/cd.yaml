@@ -109,9 +109,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Setup SSH key
-        uses: webfactory/ssh-agent@v0.8.0
+        uses: shimataro/ssh-key-action@v2
         with:
-          ssh-private-key: ${{ secrets.GITOPS_DEPLOY_KEY }}
+          key: ${{ secrets.GITOPS_DEPLOY_KEY }}
+          name: id_rsa
+          known_hosts: github.com
       
       - name: Update GitOps repository
         run: |
@@ -134,8 +136,8 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
           
-          # Add GitHub to known hosts
-          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          # Add GitHub to known hosts (already handled by ssh-key-action)
+          # ssh-keyscan -H github.com >> ~/.ssh/known_hosts
           
           # Clone GitOps repository using SSH
           git clone git@github.com:red512/vimex-gitops.git
