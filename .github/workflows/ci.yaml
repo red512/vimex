@@ -1,9 +1,6 @@
 name: CI Pipeline
 
 on:
-  push:
-    branches: ['main']  # Only run on main for merges
-    paths: ['be-flask/**']
   pull_request:
     branches: ['main']  # Run on PRs to main
     paths: ['be-flask/**']
@@ -11,7 +8,6 @@ on:
 
 jobs:
   build:
-    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
