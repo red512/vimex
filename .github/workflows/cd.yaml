@@ -53,8 +53,8 @@ jobs:
           echo "$NEW_VERSION" > be-flask/version.txt
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
           git add be-flask/version.txt
           git commit -m "chore: release v$NEW_VERSION [skip ci]" || exit 0
           git tag "v$NEW_VERSION"
@@ -132,8 +132,8 @@ jobs:
           
           echo "Updating GitOps for version: v$NEW_VERSION, environment: $ENVIRONMENT"
           
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
           
           git clone git@github.com:red512/vimex-gitops.git
           cd vimex-gitops
