@@ -17,7 +17,57 @@ on:
       - 'v*'
 
 jobs:
+  version-bump:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Bump version
+        id: bump
+        run: |
+          if [ ! -f be-flask/version.txt ]; then echo "1.0.0" > be-flask/version.txt; fi
+          VERSION=$(cat be-flask/version.txt)
+          IFS='.' read -r major minor patch <<< "$VERSION"
+          NEW_VERSION="$major.$minor.$((patch + 1))"
+          echo "$NEW_VERSION" > be-flask/version.txt
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add be-flask/version.txt
+          git commit -m "chore: release v$NEW_VERSION [skip ci]" || exit 0
+          git tag "v$NEW_VERSION"
+          git push origin main --tags
+
+  update-gitops:
+    needs: version-bump
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update GitOps repository
+        env:
+          NEW_VERSION: ${{ needs.version-bump.outputs.new_version }}
+        run: |
+          git clone https://${{ secrets.GITHUB_TOKEN }}@github.com/red512/vimex-gitops.git
+          cd vimex-gitops
+          
+          sed -i "s/tag: v[0-9]\+\.[0-9]\+\.[0-9]\+/tag: v$NEW_VERSION/" gitops/environments/staging/backend-helm-chart/values.yaml
+          
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add gitops/environments/staging/backend-helm-chart/values.yaml
+          git commit -m "chore: update backend image tag to v$NEW_VERSION"
+          git push origin main
+
   docker:
+    needs: version-bump
     runs-on: ubuntu-latest
     defaults:
       run:
