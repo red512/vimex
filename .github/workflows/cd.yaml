@@ -1,9 +1,6 @@
 name: CD Pipeline
 
 on:
-  push:
-    branches: ['main']
-    paths: ['be-flask/**']
   workflow_dispatch:
     inputs:
       environment:
@@ -14,6 +11,9 @@ on:
         options:
           - staging
           - production
+  push:
+    branches: ['main']
+    paths: ['be-flask/**']
 
 permissions:
   contents: write
@@ -185,4 +185,4 @@ jobs:
           
           curl -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"$MESSAGE\"}" \
-            ${{ secrets.SLACK_WEBHOOK_URL }}
+            ${{ secrets.SLACK_WEBHOOK_URL }}"
