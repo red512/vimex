@@ -95,51 +95,8 @@ jobs:
           
           echo "has-vulnerabilities=$VULNS_FOUND" >> $GITHUB_OUTPUT
 
-  release:
-    needs: security
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && (contains(github.event.head_commit.message, 'Merge pull request') || contains(github.event.head_commit.message, '(#') || github.event.before != '0000000000000000000000000000000000000000')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Version bump
-        run: |
-          if [ ! -f be-flask/version.txt ]; then echo "1.0.0" > be-flask/version.txt; fi
-          VERSION=$(cat be-flask/version.txt)
-          IFS='.' read -r major minor patch <<< "$VERSION"
-          NEW_VERSION="$major.$minor.$((patch + 1))"
-          echo "$NEW_VERSION" > be-flask/version.txt
-          
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add be-flask/version.txt
-          git commit -m "chore: release v$NEW_VERSION [skip ci]" || exit 0
-          git tag "v$NEW_VERSION"
-          git push origin main --tags
-          
-          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-
-      - name: Update GitOps repository
-        run: |
-          # Clone GitOps repository
-          git clone https://${{ secrets.GITHUB_TOKEN }}@github.com/red512/vimex-gitops.git gitops-repo
-          cd gitops-repo
-          
-          # Update the Helm values file
-          sed -i "s/tag: v[0-9]\+\.[0-9]\+\.[0-9]\+/tag: v$NEW_VERSION/" gitops/environments/staging/backend-helm-chart/values.yaml
-          
-          # Commit and push changes
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add gitops/environments/staging/backend-helm-chart/values.yaml
-          git commit -m "chore: update backend image tag to v$NEW_VERSION"
-          git push origin main
-
   notify:
-    needs: [build, test, security, release]
+    needs: [build, test, security]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -177,15 +134,7 @@ jobs:
             HEADER="❌ Pipeline failed for ${{ github.repository }} (${{ github.ref_name }})"
           fi
           
-          # Add release info for main branch
-          if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ needs.release.result }}" == "success" ]]; then
-            HEADER="🚀 ${HEADER#* } - New version released"
-            RELEASE_LINE="\\n**Release:** ✅ Version bumped"
-          elif [[ "${{ github.ref }}" == "refs/heads/main" && "${{ needs.release.result }}" == "failure" ]]; then
-            RELEASE_LINE="\\n**Release:** ❌ Failed"
-          else
-            RELEASE_LINE=""
-          fi
+          RELEASE_LINE=""
           
           WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
