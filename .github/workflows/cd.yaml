@@ -1,6 +1,9 @@
 name: CD Pipeline
 
 on:
+  push:
+    branches: ['main']
+    paths: ['be-flask/**']
   workflow_dispatch:
     inputs:
       environment:
@@ -11,9 +14,6 @@ on:
         options:
           - staging
           - production
-  push:
-    branches: ['main']
-    paths: ['be-flask/**']
 
 permissions:
   contents: write
@@ -37,7 +37,19 @@ jobs:
           if [ ! -f be-flask/version.txt ]; then echo "1.0.0" > be-flask/version.txt; fi
           VERSION=$(cat be-flask/version.txt)
           IFS='.' read -r major minor patch <<< "$VERSION"
-          NEW_VERSION="$major.$minor.$((patch + 1))"
+          
+          # Find next available version
+          NEW_PATCH=$((patch + 1))
+          NEW_VERSION="$major.$minor.$NEW_PATCH"
+          
+          # Keep incrementing until we find a version that doesn't have a tag
+          while git tag -l | grep -q "^v$NEW_VERSION$"; do
+            echo "Tag v$NEW_VERSION already exists, trying next version..."
+            NEW_PATCH=$((NEW_PATCH + 1))
+            NEW_VERSION="$major.$minor.$NEW_PATCH"
+          done
+          
+          echo "Using version: v$NEW_VERSION"
           echo "$NEW_VERSION" > be-flask/version.txt
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           
@@ -185,4 +197,4 @@ jobs:
           
           curl -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"$MESSAGE\"}" \
-            ${{ secrets.SLACK_WEBHOOK_URL }}"
+            ${{ secrets.SLACK_WEBHOOK_URL }}
