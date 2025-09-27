@@ -108,6 +108,11 @@ jobs:
     if: always() && needs.build-and-push.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.GITOPS_DEPLOY_KEY }}
+      
       - name: Update GitOps repository
         run: |
           # Determine version to use
@@ -125,8 +130,15 @@ jobs:
           
           echo "Updating GitOps for version: v$NEW_VERSION, environment: $ENVIRONMENT"
           
-          # Clone GitOps repository
-          git clone https://${{ secrets.GITHUB_TOKEN }}@github.com/red512/vimex-gitops.git
+          # Configure Git
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          
+          # Add GitHub to known hosts
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          
+          # Clone GitOps repository using SSH
+          git clone git@github.com:red512/vimex-gitops.git
           cd vimex-gitops
           
           # Update the Helm values file
@@ -135,11 +147,13 @@ jobs:
             sed -i "s/tag: v[0-9]\+\.[0-9]\+\.[0-9]\+/tag: v$NEW_VERSION/" "$VALUES_FILE"
             sed -i "s/tag: manual-.*/tag: v$NEW_VERSION/" "$VALUES_FILE"
             
-            git config user.name "github-actions"
-            git config user.email "github-actions@github.com"
             git add "$VALUES_FILE"
-            git commit -m "chore: update backend image to v$NEW_VERSION for $ENVIRONMENT"
-            git push origin main
+            if git diff --staged --quiet; then
+              echo "No changes to commit"
+            else
+              git commit -m "chore: update backend image to v$NEW_VERSION for $ENVIRONMENT"
+              git push origin main
+            fi
           else
             echo "Values file not found: $VALUES_FILE"
             exit 1
