@@ -115,24 +115,11 @@ jobs:
       - name: Generate security summary
         id: summary
         run: |
-          echo "=== Debug: Checking security report files ==="
-          ls -la pip-audit-report.json be-flask/grype-report.json || true
-          
-          echo "=== Debug: pip-audit report content ==="
-          head -20 pip-audit-report.json || echo "pip-audit report not found"
-          
-          echo "=== Debug: grype report content ==="
-          head -20 be-flask/grype-report.json || echo "grype report not found"
-          
           PIP_VULNS=$(cat pip-audit-report.json | jq '.dependencies | map(.vulns | length) | add' 2>/dev/null || echo "0")
           GRYPE_VULNS=$(cat be-flask/grype-report.json | jq '.matches | length' 2>/dev/null || echo "0")
-          
-          echo "=== Debug: Calculated vulnerability counts ==="
-          echo "PIP_VULNS=$PIP_VULNS"
-          echo "GRYPE_VULNS=$GRYPE_VULNS"
-          
           echo "pip_vulns=$PIP_VULNS" >> $GITHUB_OUTPUT
           echo "grype_vulns=$GRYPE_VULNS" >> $GITHUB_OUTPUT
+          echo "Debug: PIP_VULNS=$PIP_VULNS, GRYPE_VULNS=$GRYPE_VULNS"
 
       - name: Upload security reports
         uses: actions/upload-artifact@v4
