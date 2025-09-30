@@ -99,9 +99,9 @@ jobs:
           context: be-flask
           push: true
           tags: |
-            projectred521/flask-ip:latest
-            projectred521/flask-ip:v${{ steps.set_version.outputs.build_version }}
-            projectred521/flask-ip:${{ github.sha }}
+            projectred521/flask-w:latest
+            projectred521/flask-w:v${{ steps.set_version.outputs.build_version }}
+            projectred521/flask-w:${{ github.sha }}
 
   update-gitops:
     needs: [version-bump, build-and-push]
