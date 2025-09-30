@@ -1,15 +1,26 @@
 # tests/test_unit.py
 import unittest
 from unittest.mock import patch, MagicMock
-from app import app
+import os
 import json
+
+# Set test environment variables before importing app
+os.environ['CELERY_ALWAYS_EAGER'] = 'True'
+os.environ['CELERY_TASK_ALWAYS_EAGER'] = 'True'
+os.environ['CELERY_EAGER_PROPAGATES_EXCEPTIONS'] = 'True'
+
+from app import app, celery
 
 
 class TestApp(unittest.TestCase):
 
     def setUp(self):
+        app.config['TESTING'] = True
+        app.config['CELERY_ALWAYS_EAGER'] = True
+        app.config['CELERY_TASK_ALWAYS_EAGER'] = True
+        app.config['CELERY_EAGER_PROPAGATES_EXCEPTIONS'] = True
+        celery.conf.update(app.config)
         self.app = app.test_client()
-        self.app.testing = True
 
     @patch('app.fetch_weather_data.delay')
     def test_home_route(self, mock_delay):
