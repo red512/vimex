@@ -22,16 +22,6 @@ jobs:
   test:
     needs: build
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7.2-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       API_KEY: ${{ secrets.API_KEY }}
       CELERY_BROKER_URL: redis://localhost:6379/0
@@ -45,21 +35,31 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r be-flask/requirements.txt
-      - name: Wait for Redis to be ready
+
+      - name: Start Redis
         run: |
-          echo "Waiting for Redis to be ready..."
-          for i in {1..60}; do
-            if redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
+          echo "🚀 Starting Redis server..."
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+          sudo systemctl start redis-server
+          sudo systemctl enable redis-server
+
+          echo "⏳ Waiting for Redis to be ready..."
+          for i in {1..30}; do
+            if redis-cli ping > /dev/null 2>&1; then
               echo "✅ Redis is ready (attempt $i)"
               break
             fi
-            echo "⏳ Waiting for Redis... ($i/60)"
+            echo "Waiting for Redis... ($i/30)"
             sleep 2
           done
 
-          # Final verification
-          if ! redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
-            echo "❌ Redis failed to start"
+          # Verify Redis is working
+          if redis-cli ping; then
+            echo "✅ Redis is responding to ping"
+          else
+            echo "❌ Redis is not responding"
+            sudo systemctl status redis-server
             exit 1
           fi
 
