@@ -64,15 +64,22 @@ def health_check():
 @app.route('/')
 def get_weather():
     city = request.args.get('city', 'New York')
-    
-    # Submit task to queue
-    task = fetch_weather_data.delay(city)
-    
-    return jsonify({
-        "message": "Request accepted",
-        "task_id": task.id,
-        "status_url": f"/status/{task.id}"
-    }), 202
+
+    try:
+        # Submit task to queue
+        task = fetch_weather_data.delay(city)
+
+        return jsonify({
+            "message": "Request accepted",
+            "task_id": task.id,
+            "status_url": f"/status/{task.id}"
+        }), 202
+    except Exception as e:
+        logger.error(f"Failed to submit task: {str(e)}")
+        return jsonify({
+            "error": "Service temporarily unavailable",
+            "message": "Queue service is not available"
+        }), 503
 
 @app.route('/status/<task_id>')
 def get_status(task_id):
