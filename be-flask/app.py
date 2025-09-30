@@ -13,12 +13,35 @@ CORS(app)
 app.config['CELERY_BROKER_URL'] = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 app.config['CELERY_RESULT_BACKEND'] = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 
-celery = Celery(
-    app.name,
-    broker=app.config['CELERY_BROKER_URL'],
-    backend=app.config['CELERY_RESULT_BACKEND']
-)
-celery.conf.update(app.config)
+def make_celery():
+    """Create Celery instance with lazy configuration"""
+    celery = Celery(
+        app.name,
+        broker=app.config['CELERY_BROKER_URL'],
+        backend=app.config['CELERY_RESULT_BACKEND']
+    )
+
+    # Configure Celery
+    celery.conf.update(
+        task_serializer='json',
+        accept_content=['json'],
+        result_serializer='json',
+        timezone='UTC',
+        enable_utc=True,
+        broker_connection_retry_on_startup=True,
+        broker_connection_retry=True,
+        result_backend_transport_options={
+            'retry_policy': {
+                'timeout': 5.0
+            }
+        }
+    )
+    celery.conf.update(app.config)
+
+    return celery
+
+# Initialize Celery
+celery = make_celery()
 
 # OpenWeatherMap API key
 API_KEY = os.environ.get("API_KEY")
@@ -57,9 +80,28 @@ def fetch_weather_data(self, city):
         # Retry up to 3 times with exponential backoff
         raise self.retry(countdown=60 * (self.request.retries + 1))
 
+def check_redis_connection():
+    """Check if Redis is available"""
+    try:
+        # Try to ping Redis with a short timeout
+        import redis
+        r = redis.Redis.from_url(app.config['CELERY_BROKER_URL'], socket_timeout=2, socket_connect_timeout=2)
+        r.ping()
+        return True
+    except Exception:
+        return False
+
 @app.route('/health')
 def health_check():
-    return jsonify({"status": "healthy"}), 200
+    redis_status = check_redis_connection()
+
+    response = {
+        "status": "healthy",
+        "redis": "connected" if redis_status else "disconnected"
+    }
+
+    # Return 200 even if Redis is down - the app itself is healthy
+    return jsonify(response), 200
 
 @app.route('/')
 def get_weather():
