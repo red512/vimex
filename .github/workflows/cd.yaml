@@ -83,6 +83,7 @@ jobs:
           else
             echo "build_version=${{ needs.version-bump.outputs.new_version }}" >> $GITHUB_OUTPUT
           fi
+          echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -97,11 +98,12 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: be-flask
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             projectred521/flask-w:latest
             projectred521/flask-w:v${{ steps.set_version.outputs.build_version }}
-            projectred521/flask-w:${{ github.sha:0:7 }}
+            projectred521/flask-w:${{ steps.set_version.outputs.short_sha }}
 
   update-gitops:
     needs: [version-bump, build-and-push]
