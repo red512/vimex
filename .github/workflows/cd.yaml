@@ -75,9 +75,13 @@ jobs:
             VERSION="${{ needs.version-bump.outputs.new_version }}"
             ENV="staging"
           fi
+<<<<<<< HEAD
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "environment=$ENV" >> $GITHUB_OUTPUT
           echo "sha_short=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+=======
+          echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+>>>>>>> 6dcf930951d94a63cade1016c98392724f09d649
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -96,8 +100,21 @@ jobs:
           push: true
           tags: |
             projectred521/flask-w:latest
+<<<<<<< HEAD
             projectred521/flask-w:v${{ steps.version.outputs.version }}
             projectred521/flask-w:${{ steps.version.outputs.sha_short }}
+=======
+            projectred521/flask-w:v${{ steps.set_version.outputs.build_version }}
+            projectred521/flask-w:${{ steps.set_version.outputs.short_sha }}
+
+  update-gitops:
+    needs: [version-bump, build-and-push]
+    if: always() && needs.build-and-push.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+>>>>>>> 6dcf930951d94a63cade1016c98392724f09d649
       
       - name: Update GitOps repository
         run: |
