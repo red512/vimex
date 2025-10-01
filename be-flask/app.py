@@ -10,15 +10,15 @@ app = Flask(__name__)
 CORS(app)
 
 # Configure Celery
-app.config['CELERY_BROKER_URL'] = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-app.config['CELERY_RESULT_BACKEND'] = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+app.config['broker_url'] = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+app.config['result_backend'] = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 
 def make_celery():
     """Create Celery instance with lazy configuration"""
     celery = Celery(
         app.name,
-        broker=app.config['CELERY_BROKER_URL'],
-        backend=app.config['CELERY_RESULT_BACKEND']
+        broker=app.config['broker_url'],
+        backend=app.config['result_backend']
     )
 
     # Configure Celery
@@ -85,7 +85,7 @@ def check_redis_connection():
     try:
         # Try to ping Redis with a short timeout
         import redis
-        r = redis.Redis.from_url(app.config['CELERY_BROKER_URL'], socket_timeout=2, socket_connect_timeout=2)
+        r = redis.Redis.from_url(app.config['broker_url'], socket_timeout=2, socket_connect_timeout=2)
         r.ping()
         return True
     except Exception:

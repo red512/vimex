@@ -5,9 +5,8 @@ import os
 import json
 
 # Set test environment variables before importing app
-os.environ['CELERY_ALWAYS_EAGER'] = 'True'
-os.environ['CELERY_TASK_ALWAYS_EAGER'] = 'True'
-os.environ['CELERY_EAGER_PROPAGATES_EXCEPTIONS'] = 'True'
+os.environ['task_always_eager'] = 'True'
+os.environ['task_eager_propagates'] = 'True'
 
 from app import app, celery
 
@@ -16,9 +15,8 @@ class TestApp(unittest.TestCase):
 
     def setUp(self):
         app.config['TESTING'] = True
-        app.config['CELERY_ALWAYS_EAGER'] = True
-        app.config['CELERY_TASK_ALWAYS_EAGER'] = True
-        app.config['CELERY_EAGER_PROPAGATES_EXCEPTIONS'] = True
+        app.config['task_always_eager'] = True
+        app.config['task_eager_propagates'] = True
         celery.conf.update(app.config)
         self.app = app.test_client()
 
