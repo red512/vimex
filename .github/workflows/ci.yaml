@@ -2,12 +2,25 @@ name: CI Pipeline
 
 on:
   pull_request:
-    branches: ['main']
+    branches: ['main']  # Run on PRs to main
     paths: ['be-flask/**']
   workflow_dispatch:
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r be-flask/requirements.txt
+
   test:
+    needs: build
     runs-on: ubuntu-latest
     env:
       API_KEY: ${{ secrets.API_KEY }}
@@ -18,7 +31,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.8'
-      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -26,93 +38,223 @@ jobs:
 
       - name: Start Redis
         run: |
-          sudo apt-get update && sudo apt-get install -y redis-server
+          echo "🚀 Starting Redis server..."
+          sudo apt-get update
+          sudo apt-get install -y redis-server
           sudo systemctl start redis-server
-          timeout 30 bash -c 'until redis-cli ping > /dev/null 2>&1; do sleep 1; done'
+          sudo systemctl enable redis-server
+
+          echo "⏳ Waiting for Redis to be ready..."
+          for i in {1..30}; do
+            if redis-cli ping > /dev/null 2>&1; then
+              echo "✅ Redis is ready (attempt $i)"
+              break
+            fi
+            echo "Waiting for Redis... ($i/30)"
+            sleep 2
+          done
+
+          # Verify Redis is working
+          if redis-cli ping; then
+            echo "✅ Redis is responding to ping"
+          else
+            echo "❌ Redis is not responding"
+            sudo systemctl status redis-server
+            exit 1
+          fi
 
       - name: Run unit tests
-        run: cd be-flask && python test_unit.py
-
-      - name: Start Flask app and Celery
         run: |
           cd be-flask
+          echo "🧪 Running unit tests..."
+          python test_unit.py
+
+      - name: Start Flask app in background
+        run: |
+          cd be-flask
+          echo "🚀 Starting Flask app..."
           python app.py &
-          echo $! > flask.pid
-          timeout 30 bash -c 'until curl -sf http://localhost:5000/health > /dev/null; do sleep 1; done'
+          FLASK_PID=$!
+          echo $FLASK_PID > flask.pid
+
+          # Wait for Flask to start
+          for i in {1..30}; do
+            if curl -s http://localhost:5000/health > /dev/null 2>&1; then
+              echo "✅ Flask app is ready (attempt $i)"
+              break
+            fi
+            echo "⏳ Waiting for Flask app... ($i/30)"
+            sleep 2
+          done
+
+      - name: Start Celery worker in background
+        run: |
+          cd be-flask
+          echo "⚙️ Starting Celery worker..."
           celery -A app.celery worker --loglevel=info --detach
+          sleep 5
+
+      - name: Verify all services
+        run: |
+          echo "🔍 Verifying services..."
+
+          # Check Redis
+          if redis-cli -h localhost -p 6379 ping; then
+            echo "✅ Redis is responding"
+          else
+            echo "❌ Redis is not responding"
+          fi
+
+          # Check Flask app
+          if curl -f http://localhost:5000/health; then
+            echo "✅ Flask app is responding"
+          else
+            echo "❌ Flask app is not responding"
+          fi
 
       - name: Run integration tests
-        run: cd be-flask && python test_integration.py
+        run: |
+          cd be-flask
+          echo "🧪 Running integration tests..."
+          python test_integration.py
 
-      - name: Cleanup
+      - name: Cleanup processes
         if: always()
         run: |
-          [ -f be-flask/flask.pid ] && kill $(cat be-flask/flask.pid) 2>/dev/null || true
-          pkill -f "python.*app.py|celery.*worker" || true
+          echo "🧹 Cleaning up..."
+          cd be-flask
 
-  validate:
+          # Kill Flask app
+          if [ -f flask.pid ]; then
+            kill $(cat flask.pid) 2>/dev/null || true
+            rm flask.pid
+          fi
+
+          # Kill any remaining processes
+          pkill -f "python.*app.py" || true
+          pkill -f "celery.*worker" || true
+
+          echo "✅ Cleanup completed"
+
+  docker-build:
+    needs: test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        check: [docker, security]
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Docker build test
-        if: matrix.check == 'docker'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Test multi-architecture build
         uses: docker/build-push-action@v5
         with:
           context: be-flask
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: false
           tags: flask-w:test
-      
-      - name: Security scan
-        if: matrix.check == 'security'
+
+  security:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      has-vulnerabilities: ${{ steps.scan.outputs.has-vulnerabilities }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r be-flask/requirements.txt pip-audit
+          pip install -r be-flask/requirements.txt
+      
+      - name: Security scan
+        id: scan
+        run: |
+          pip install pip-audit
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
           
           echo "## Security Scan Results" >> $GITHUB_STEP_SUMMARY
           VULNS_FOUND=false
           
-          echo "### 🔒 pip-audit" >> $GITHUB_STEP_SUMMARY
-          if pip-audit --requirement be-flask/requirements.txt >> $GITHUB_STEP_SUMMARY 2>&1; then
-            echo "✅ Clean" >> $GITHUB_STEP_SUMMARY
+          # pip-audit
+          echo "### 🔒 pip-audit Results" >> $GITHUB_STEP_SUMMARY
+          if pip-audit --requirement be-flask/requirements.txt; then
+            echo "✅ No vulnerabilities" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            pip-audit --requirement be-flask/requirements.txt >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
             VULNS_FOUND=true
           fi
           
-          echo "### 🔍 Grype" >> $GITHUB_STEP_SUMMARY
-          cd be-flask
-          if grype . --fail-on medium -q >> $GITHUB_STEP_SUMMARY 2>&1; then
-            echo "✅ Clean" >> $GITHUB_STEP_SUMMARY
+          # Grype
+          cd be-flask && pip freeze > requirements.txt
+          echo "### 🔍 Grype Results" >> $GITHUB_STEP_SUMMARY
+          if grype . --fail-on medium --quiet; then
+            echo "✅ No vulnerabilities" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ Vulnerabilities found" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grype . --by-cve >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
             VULNS_FOUND=true
           fi
           
           echo "has-vulnerabilities=$VULNS_FOUND" >> $GITHUB_OUTPUT
 
   notify:
-    needs: [test, validate]
+    needs: [build, test, docker-build, security]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Send notification
         run: |
-          [[ "${{ needs.test.result }}" == "success" ]] && TEST="✅ Passed" || TEST="❌ Failed"
-          [[ "${{ needs.validate.result }}" == "success" ]] && VALIDATE="✅ Passed" || VALIDATE="❌ Failed"
-          
-          if [[ "${{ needs.test.result }}" == "success" && "${{ needs.validate.result }}" == "success" ]]; then
-            HEADER="✅ All checks passed for ${{ github.repository }} (PR #${{ github.event.pull_request.number }})"
+          # Determine individual statuses
+          BUILD_OK=$([[ "${{ needs.build.result }}" == "success" ]] && echo "true" || echo "false")
+          TEST_OK=$([[ "${{ needs.test.result }}" == "success" ]] && echo "true" || echo "false")
+          DOCKER_OK=$([[ "${{ needs.docker-build.result }}" == "success" ]] && echo "true" || echo "false")
+          SECURITY_OK=$([[ "${{ needs.security.result }}" == "success" ]] && echo "true" || echo "false")
+          HAS_VULNS="${{ needs.security.outputs.has-vulnerabilities }}"
+
+          # Build status lines
+          if [[ "$TEST_OK" == "true" ]]; then
+            TEST_LINE="**Tests:** ✅ Passed"
           else
-            HEADER="❌ Pipeline failed for ${{ github.repository }} (PR #${{ github.event.pull_request.number }})"
+            TEST_LINE="**Tests:** ❌ Failed"
+          fi
+
+          if [[ "$DOCKER_OK" == "true" ]]; then
+            DOCKER_LINE="**Docker:** ✅ Multi-arch build successful"
+          else
+            DOCKER_LINE="**Docker:** ❌ Build failed"
+          fi
+
+          if [[ "$SECURITY_OK" == "true" && "$HAS_VULNS" != "true" ]]; then
+            SECURITY_LINE="**Security:** ✅ Clean"
+          elif [[ "$SECURITY_OK" == "true" && "$HAS_VULNS" == "true" ]]; then
+            SECURITY_LINE="**Security:** ⚠️ Vulnerabilities detected"
+          else
+            SECURITY_LINE="**Security:** ❌ Scan failed"
+          fi
+
+          # Overall status
+          if [[ "$BUILD_OK" == "true" && "$TEST_OK" == "true" && "$DOCKER_OK" == "true" && "$SECURITY_OK" == "true" ]]; then
+            if [[ "$HAS_VULNS" == "true" ]]; then
+              HEADER="⚠️ Tests passed - Security vulnerabilities found for ${{ github.repository }} (${{ github.ref_name }})"
+            else
+              HEADER="✅ All checks passed for ${{ github.repository }} (${{ github.ref_name }})"
+            fi
+          else
+            HEADER="❌ Pipeline failed for ${{ github.repository }} (${{ github.ref_name }})"
           fi
           
-          MESSAGE="$HEADER\\n**Tests:** $TEST\\n**Validation:** $VALIDATE\\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
+          RELEASE_LINE=""
+          
+          WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          MESSAGE="$HEADER\\n$TEST_LINE\\n$DOCKER_LINE\\n$SECURITY_LINE$RELEASE_LINE\\n<$WORKFLOW_URL|View Pipeline Details>"
           
           curl -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"$MESSAGE\"}" \

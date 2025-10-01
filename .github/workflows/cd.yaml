@@ -34,17 +34,22 @@ jobs:
       - name: Bump version
         id: bump
         run: |
-          [ ! -f be-flask/version.txt ] && echo "1.0.0" > be-flask/version.txt
-          IFS='.' read -r major minor patch < be-flask/version.txt
+          if [ ! -f be-flask/version.txt ]; then echo "1.0.0" > be-flask/version.txt; fi
+          VERSION=$(cat be-flask/version.txt)
+          IFS='.' read -r major minor patch <<< "$VERSION"
           
+          # Find next available version
           NEW_PATCH=$((patch + 1))
           NEW_VERSION="$major.$minor.$NEW_PATCH"
           
+          # Keep incrementing until we find a version that doesn't have a tag
           while git tag -l | grep -q "^v$NEW_VERSION$"; do
+            echo "Tag v$NEW_VERSION already exists, trying next version..."
             NEW_PATCH=$((NEW_PATCH + 1))
             NEW_VERSION="$major.$minor.$NEW_PATCH"
           done
           
+          echo "Using version: v$NEW_VERSION"
           echo "$NEW_VERSION" > be-flask/version.txt
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
           
@@ -55,33 +60,30 @@ jobs:
           git tag "v$NEW_VERSION"
           git push origin main --tags
 
-  deploy:
+  build-and-push:
     needs: version-bump
     if: always() && (needs.version-bump.result == 'success' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      environment: ${{ steps.version.outputs.environment }}
+      version: ${{ needs.version-bump.outputs.new_version || github.event.inputs.version || 'manual' }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
       
-      - name: Set version and environment
-        id: version
+      - name: Set version for manual runs
+        id: set_version
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            VERSION=$(cat be-flask/version.txt 2>/dev/null || echo "manual-$(date +%Y%m%d-%H%M%S)")
-            ENV="${{ github.event.inputs.environment }}"
+            if [ -f be-flask/version.txt ]; then
+              VERSION=$(cat be-flask/version.txt)
+            else
+              VERSION="manual-$(date +%Y%m%d-%H%M%S)"
+            fi
+            echo "build_version=$VERSION" >> $GITHUB_OUTPUT
           else
-            VERSION="${{ needs.version-bump.outputs.new_version }}"
-            ENV="staging"
+            echo "build_version=${{ needs.version-bump.outputs.new_version }}" >> $GITHUB_OUTPUT
           fi
-<<<<<<< HEAD
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "environment=$ENV" >> $GITHUB_OUTPUT
-          echo "sha_short=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
-=======
           echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
->>>>>>> 6dcf930951d94a63cade1016c98392724f09d649
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -92,7 +94,7 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
       
-      - name: Build and push Docker image
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: be-flask
@@ -100,10 +102,6 @@ jobs:
           push: true
           tags: |
             projectred521/flask-w:latest
-<<<<<<< HEAD
-            projectred521/flask-w:v${{ steps.version.outputs.version }}
-            projectred521/flask-w:${{ steps.version.outputs.sha_short }}
-=======
             projectred521/flask-w:v${{ steps.set_version.outputs.build_version }}
             projectred521/flask-w:${{ steps.set_version.outputs.short_sha }}
 
@@ -114,14 +112,27 @@ jobs:
     steps:
       - name: Checkout main repository
         uses: actions/checkout@v4
->>>>>>> 6dcf930951d94a63cade1016c98392724f09d649
       
-      - name: Update GitOps repository
+      - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.GITOPS_DEPLOY_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan github.com >> ~/.ssh/known_hosts
+      
+      - name: Update GitOps repository
+        run: |
+          # Determine version to use
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # Read from version.txt (now available after checkout)
+            NEW_VERSION=$(cat be-flask/version.txt)
+            ENVIRONMENT="${{ github.event.inputs.environment }}"
+          else
+            NEW_VERSION="${{ needs.version-bump.outputs.new_version }}"
+            ENVIRONMENT="staging"
+          fi
+          
+          echo "Updating GitOps for version: v$NEW_VERSION, environment: $ENVIRONMENT"
           
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
@@ -129,37 +140,65 @@ jobs:
           git clone git@github.com:red512/vimex-gitops.git
           cd vimex-gitops
           
-          VALUES_FILE="gitops/environments/${{ steps.version.outputs.environment }}/backend-helm-chart/values.yaml"
-          sed -i "s|tag: .*|tag: v${{ steps.version.outputs.version }}|" "$VALUES_FILE"
+          VALUES_FILE="gitops/environments/$ENVIRONMENT/backend-helm-chart/values.yaml"
+          sed -i "s/tag: v[0-9]\+\.[0-9]\+\.[0-9]\+/tag: v$NEW_VERSION/" "$VALUES_FILE"
+          sed -i "s/tag: manual-.*/tag: v$NEW_VERSION/" "$VALUES_FILE"
+          sed -i "s/tag: v.*/tag: v$NEW_VERSION/" "$VALUES_FILE"
           
           git add "$VALUES_FILE"
-          git commit -m "chore: deploy backend v${{ steps.version.outputs.version }} to ${{ steps.version.outputs.environment }}"
+          git commit -m "chore: update backend image to v$NEW_VERSION for $ENVIRONMENT"
           git push origin main
 
   notify:
-    needs: deploy
+    needs: [version-bump, build-and-push, update-gitops]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Send notification
         run: |
-          VERSION="${{ needs.deploy.outputs.version }}"
-          ENV="${{ needs.deploy.outputs.environment }}"
-          STATUS="${{ needs.deploy.result }}"
+          # Determine job statuses
+          VERSION_STATUS="${{ needs.version-bump.result }}"
+          BUILD_STATUS="${{ needs.build-and-push.result }}"
+          GITOPS_STATUS="${{ needs.update-gitops.result }}"
           
-          if [[ "$STATUS" == "success" ]]; then
-            HEADER="🚀 Deployment successful: v$VERSION → $ENV"
-            DOCKER="✅ Built and pushed"
-            GITOPS="✅ Updated"
+          # Determine version for display
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            DISPLAY_VERSION="manual deployment"
+            ENVIRONMENT="${{ github.event.inputs.environment }}"
           else
-            HEADER="❌ Deployment failed: v$VERSION → $ENV"
-            DOCKER="❌ Failed"
-            GITOPS="❌ Failed"
+            DISPLAY_VERSION="v${{ needs.version-bump.outputs.new_version }}"
+            ENVIRONMENT="staging"
           fi
           
-          MESSAGE="$HEADER\\n**Version:** v$VERSION\\n**Docker:** $DOCKER\\n**GitOps:** $GITOPS\\n<https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Details>"
+          # Build status lines
+          if [[ "$VERSION_STATUS" == "success" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION_LINE="**Version:** ✅ $DISPLAY_VERSION"
+          else
+            VERSION_LINE="**Version:** ❌ Failed"
+          fi
+          
+          if [[ "$BUILD_STATUS" == "success" ]]; then
+            BUILD_LINE="**Docker Build:** ✅ Completed"
+          else
+            BUILD_LINE="**Docker Build:** ❌ Failed"
+          fi
+          
+          if [[ "$GITOPS_STATUS" == "success" ]]; then
+            GITOPS_LINE="**GitOps Update:** ✅ $ENVIRONMENT environment updated"
+          else
+            GITOPS_LINE="**GitOps Update:** ❌ Failed"
+          fi
+          
+          # Overall status
+          if [[ "$BUILD_STATUS" == "success" && "$GITOPS_STATUS" == "success" ]]; then
+            HEADER="🚀 Deployment successful for ${{ github.repository }} ($DISPLAY_VERSION)"
+          else
+            HEADER="❌ Deployment failed for ${{ github.repository }}"
+          fi
+          
+          WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MESSAGE="$HEADER\\n$VERSION_LINE\\n$BUILD_LINE\\n$GITOPS_LINE\\n<$WORKFLOW_URL|View Deployment Details>"
           
           curl -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"$MESSAGE\"}" \
             ${{ secrets.SLACK_WEBHOOK_URL }}
-            
