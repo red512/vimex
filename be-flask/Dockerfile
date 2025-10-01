@@ -1,14 +1,30 @@
-# Use the official Python image as the base image
+# Build stage
+FROM python:3.8-slim as builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory
+WORKDIR /app
+
+# Copy requirements and install Python packages
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Runtime stage
 FROM python:3.8-slim
 
 # Set the working directory inside the container
 WORKDIR /app
 
-# Copy the requirements file into the container at /app
-COPY requirements.txt .
+# Copy Python packages from builder stage
+COPY --from=builder /root/.local /root/.local
 
-# Install the required packages
-RUN pip install --no-cache-dir -r requirements.txt
+# Make sure scripts in .local are usable
+ENV PATH=/root/.local/bin:$PATH
 
 # Copy the current directory contents into the container at /app
 COPY . .
