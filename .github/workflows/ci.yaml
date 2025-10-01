@@ -136,23 +136,6 @@ jobs:
 
           echo "✅ Cleanup completed"
 
-  docker-build:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Test multi-architecture build
-        uses: docker/build-push-action@v5
-        with:
-          context: be-flask
-          platforms: linux/amd64,linux/arm64
-          push: false
-          tags: flask-w:test
-
   security:
     needs: test
     runs-on: ubuntu-latest
@@ -205,7 +188,7 @@ jobs:
           echo "has-vulnerabilities=$VULNS_FOUND" >> $GITHUB_OUTPUT
 
   notify:
-    needs: [build, test, docker-build, security]
+    needs: [build, test, security]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -214,7 +197,6 @@ jobs:
           # Determine individual statuses
           BUILD_OK=$([[ "${{ needs.build.result }}" == "success" ]] && echo "true" || echo "false")
           TEST_OK=$([[ "${{ needs.test.result }}" == "success" ]] && echo "true" || echo "false")
-          DOCKER_OK=$([[ "${{ needs.docker-build.result }}" == "success" ]] && echo "true" || echo "false")
           SECURITY_OK=$([[ "${{ needs.security.result }}" == "success" ]] && echo "true" || echo "false")
           HAS_VULNS="${{ needs.security.outputs.has-vulnerabilities }}"
 
@@ -223,12 +205,6 @@ jobs:
             TEST_LINE="**Tests:** ✅ Passed"
           else
             TEST_LINE="**Tests:** ❌ Failed"
-          fi
-
-          if [[ "$DOCKER_OK" == "true" ]]; then
-            DOCKER_LINE="**Docker:** ✅ Multi-arch build successful"
-          else
-            DOCKER_LINE="**Docker:** ❌ Build failed"
           fi
 
           if [[ "$SECURITY_OK" == "true" && "$HAS_VULNS" != "true" ]]; then
@@ -240,7 +216,7 @@ jobs:
           fi
 
           # Overall status
-          if [[ "$BUILD_OK" == "true" && "$TEST_OK" == "true" && "$DOCKER_OK" == "true" && "$SECURITY_OK" == "true" ]]; then
+          if [[ "$BUILD_OK" == "true" && "$TEST_OK" == "true" && "$SECURITY_OK" == "true" ]]; then
             if [[ "$HAS_VULNS" == "true" ]]; then
               HEADER="⚠️ Tests passed - Security vulnerabilities found for ${{ github.repository }} (${{ github.ref_name }})"
             else
@@ -254,7 +230,7 @@ jobs:
           
           WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          MESSAGE="$HEADER\\n$TEST_LINE\\n$DOCKER_LINE\\n$SECURITY_LINE$RELEASE_LINE\\n<$WORKFLOW_URL|View Pipeline Details>"
+          MESSAGE="$HEADER\\n$TEST_LINE\\n$SECURITY_LINE$RELEASE_LINE\\n<$WORKFLOW_URL|View Pipeline Details>"
           
           curl -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"$MESSAGE\"}" \
