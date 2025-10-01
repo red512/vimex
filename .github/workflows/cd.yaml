@@ -103,7 +103,11 @@ jobs:
           tags: |
             projectred521/flask-w:latest
             projectred521/flask-w:v${{ steps.set_version.outputs.build_version }}
+<<<<<<< HEAD
             projectred521/flask-w:${{ steps.set_version.outputs.short_sha }}
+=======
+            projectred521/flask-w:${{ github.sha:0:7 }}
+>>>>>>> 8fcca7da54a6c3b85989ca6a954bd4d184c7f384
 
   update-gitops:
     needs: [version-bump, build-and-push]
