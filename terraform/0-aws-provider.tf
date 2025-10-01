@@ -1,7 +1,7 @@
-provider "aws" {
-  region = "us-east-1"
-  # version = ">= 3.72.0"
-}
+# provider "aws" {
+#   region = "us-east-1"
+#   # version = ">= 3.72.0"
+# }
 
 terraform {
   required_providers {
