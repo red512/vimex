@@ -264,13 +264,6 @@ Every CI run includes:
 5. ArgoCD detects changes and syncs to Kubernetes cluster
 6. Application automatically deployed to target environment
 
-**Benefits**
-- **Separation of Concerns**: Code and configuration managed independently
-- **Audit Trail**: All infrastructure changes tracked in Git
-- **Rollback Capability**: Easy to revert to previous versions
-- **Declarative**: Desired state defined in Git
-- **Automated**: No manual kubectl commands needed
-
 ### Testing Infrastructure
 
 The test suite includes:
