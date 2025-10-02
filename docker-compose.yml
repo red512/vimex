@@ -1,0 +1,65 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: vimex-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - vimex-network
+
+  flask-app:
+    build:
+      context: ./be-flask
+      dockerfile: Dockerfile
+    container_name: vimex-flask
+    ports:
+      - "5000:5000"
+    environment:
+      - API_KEY=${API_KEY:-your_openweather_api_key_here}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    volumes:
+      - ./be-flask:/app
+      - /app/venv
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vimex-network
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: ./be-flask
+      dockerfile: Dockerfile
+    container_name: vimex-celery-worker
+    command: ["celery", "-A", "app.celery", "worker", "--loglevel=info", "--uid=nobody", "--gid=nogroup"]
+    environment:
+      - API_KEY=${API_KEY:-your_openweather_api_key_here}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - ./be-flask:/app
+      - /app/venv
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - vimex-network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
+networks:
+  vimex-network:
+    driver: bridge

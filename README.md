@@ -300,6 +300,61 @@ python test_integration.py
 
 ### Local Development
 
+#### Docker Compose (Recommended)
+
+The easiest way to run the application locally is using Docker Compose, which sets up the entire stack including Flask app, Redis, and Celery worker.
+
+**Prerequisites**
+- Docker and Docker Compose installed
+- OpenWeatherMap API key (get one [here](https://openweathermap.org/api))
+
+**Quick Start**
+```bash
+# 1. Set up environment variables
+make setup
+# Edit .env file and add your API key
+
+# 2. Start the application
+make build
+
+# 3. Access the application
+# Flask app: http://localhost:5000
+```
+
+**Available Make Commands**
+```bash
+make help   # Show all available commands
+make setup  # Copy .env.example to .env
+make up     # Start all services
+make build  # Build and start all services
+make down   # Stop all services
+make logs   # Show logs from all services
+make test   # Run tests in containers
+make clean  # Remove all containers and volumes
+```
+
+**Manual Docker Compose Commands**
+```bash
+# Start all services
+docker compose up
+
+# Build and start
+docker compose up --build
+
+# Stop services
+docker compose down
+
+# View logs
+docker compose logs -f
+```
+
+**Services Included**
+- **flask-app**: Main Flask application (port 5000)
+- **redis**: Redis server for Celery broker/backend (port 6379)
+- **celery-worker**: Celery worker for async task processing
+
+#### Manual Setup (Alternative)
+
 **Running the Flask Application**
 ```
 cd be-flask
