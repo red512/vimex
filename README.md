@@ -132,16 +132,21 @@ https://github.com/red512/vimex-gitops
 - Generates security reports in GitHub Actions summary
 - Fails build on medium or higher severity vulnerabilities
 
+<img width="1057" height="624" alt="image" src="https://github.com/user-attachments/assets/cc0332ff-8f7d-4ddc-a55c-099cabb37042" />
+
+
 **Notification Stage**
 - Sends detailed status updates to Slack
 - Includes test results, security scan status, and workflow links
 - Visual indicators (✅/❌/⚠️) for quick status assessment
 
+<img width="646" height="114" alt="image" src="https://github.com/user-attachments/assets/c2ff89d9-2cce-4f1c-9a5b-ab8fd4cb967f" />
+
+
 **Trigger Events:**
 - Pull requests to `main` branch (with changes in `be-flask/`)
 - Manual workflow dispatch
 
-![image](https://github.com/red512/vimex/assets/59205478/8b30bd4f-bd1a-4413-bcdb-dc782c1b0cea)
 
 ### CD Pipeline - Continuous Deployment
 
@@ -176,6 +181,9 @@ https://github.com/red512/vimex-gitops
 - Sends deployment status to Slack
 - Includes version information, build status, and GitOps update status
 - Provides direct links to workflow runs
+
+<img width="478" height="158" alt="image" src="https://github.com/user-attachments/assets/b3e92c70-34a0-4af3-8767-fe9a5f566ceb" />
+
 
 **Trigger Events:**
 - Push to `main` branch (with changes in `be-flask/`)
