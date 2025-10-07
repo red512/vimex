@@ -1,5 +1,6 @@
 import requests
 import os
+import sys
 import logging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -9,19 +10,20 @@ from celery import Celery
 app = Flask(__name__)
 CORS(app)
 
-# Configure Celery
-app.config['broker_url'] = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-app.config['result_backend'] = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+# Redis configuration - use consistent URL
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+app.config['broker_url'] = REDIS_URL
+app.config['result_backend'] = REDIS_URL
 
 def make_celery():
-    """Create Celery instance with redis-py compatible configuration"""
+    """Create Celery instance with simple, reliable configuration"""
     celery = Celery(
         'weather_app',
         broker=app.config['broker_url'],
         backend=app.config['result_backend']
     )
 
-    # Configuration that works with redis-py 5.x and avoids QoS issues
+    # Simple, battle-tested configuration
     celery.conf.update(
         task_serializer='json',
         accept_content=['json'],
@@ -29,19 +31,9 @@ def make_celery():
         timezone='UTC',
         enable_utc=True,
         task_track_started=True,
-        task_ignore_result=True,
-        worker_hijack_root_logger=False,
-        worker_log_color=False,
-        # Properly disable QoS to avoid hset issues
-        worker_prefetch_multiplier=1,  # Use 1 instead of 0 for better compatibility
-        task_acks_late=False,           # Don't use late acks
-        worker_disable_rate_limits=True,
-        # Additional settings for stability
-        broker_transport_options={
-            'priority_steps': list(range(10)),
-            'sep': ':',
-            'queue_order_strategy': 'priority',
-        }
+        worker_prefetch_multiplier=1,
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
     )
 
     return celery
@@ -56,7 +48,7 @@ API_KEY = os.environ.get("API_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-@celery.task(bind=True, max_retries=3, acks_late=False, ignore_result=True)
+@celery.task(bind=True, max_retries=3)
 def fetch_weather_data(self, city):
     url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
     
@@ -89,9 +81,8 @@ def fetch_weather_data(self, city):
 def check_redis_connection():
     """Check if Redis is available"""
     try:
-        # Try to ping Redis with a short timeout
         import redis
-        r = redis.Redis.from_url(app.config['broker_url'], socket_timeout=2, socket_connect_timeout=2)
+        r = redis.from_url(REDIS_URL, socket_timeout=2, socket_connect_timeout=2)
         r.ping()
         return True
     except Exception:
@@ -179,35 +170,41 @@ def get_queue_status():
     """Get current queue status for monitoring"""
     try:
         import redis
-        r = redis.Redis.from_url(app.config['broker_url'])
-        
+        r = redis.from_url(REDIS_URL)
+
         queue_length = r.llen('celery')
-        
+
         return jsonify({
             "queue_length": queue_length,
             "queue_name": "celery",
             "redis_connected": True
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Failed to get queue status: {str(e)}")
         return jsonify({
             "queue_length": 0,
-            "queue_name": "celery", 
+            "queue_name": "celery",
             "redis_connected": False,
             "error": str(e)
         }), 500
 
-@celery.task(bind=True)
-def task_failure_handler(self, exc, task_id, args, kwargs, einfo):
-    """Handle task failures by logging the error and skipping the task."""
-    logger.error(f"Task {task_id} failed with error: {exc}")
-    logger.error(f"Arguments: {args}, Keyword Arguments: {kwargs}")
-    logger.error(f"Traceback: {einfo}")
+def run_worker():
+    """Run Celery worker"""
+    logger.info("Starting Celery worker...")
+    celery.start()
 
-# Attach the failure handler to the Celery worker
-celery.conf.task_failure_handler = task_failure_handler
+def run_api():
+    """Run Flask API"""
+    logger.info("Starting Flask API...")
+    app.run(host='0.0.0.0', port=5000)
 
 if __name__ == '__main__':
-    app.run()
+    # Check if we should run as worker or API
+    if len(sys.argv) > 1 and sys.argv[1] == 'worker':
+        # Run as Celery worker
+        run_worker()
+    else:
+        # Run as Flask API (default)
+        run_api()
 
