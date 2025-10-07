@@ -144,7 +144,16 @@ def get_status(task_id):
     
     return jsonify({"status": "processing"}), 202
 
+@celery.task(bind=True)
+def task_failure_handler(self, exc, task_id, args, kwargs, einfo):
+    """Handle task failures by logging the error and skipping the task."""
+    logger.error(f"Task {task_id} failed with error: {exc}")
+    logger.error(f"Arguments: {args}, Keyword Arguments: {kwargs}")
+    logger.error(f"Traceback: {einfo}")
+
+# Attach the failure handler to the Celery worker
+celery.conf.task_failure_handler = task_failure_handler
+
 if __name__ == '__main__':
     app.run()
-    
-    
+
