@@ -5,13 +5,16 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from celery import Celery
 
+
 # Initialize Flask
 app = Flask(__name__)
 CORS(app)
 
+
 # Configure Celery
 app.config['broker_url'] = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
 app.config['result_backend'] = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+
 
 def make_celery():
     """Create Celery instance with lazy configuration"""
@@ -30,29 +33,44 @@ def make_celery():
         enable_utc=True,
         broker_connection_retry_on_startup=True,
         broker_connection_retry=True,
+        
+        # CRITICAL FIX: Disable ACK emulation in Redis transport
+        broker_transport_options={
+            'ack_emulation': False,
+            'visibility_timeout': 3600,
+        },
+        
         result_backend_transport_options={
             'retry_policy': {
                 'timeout': 5.0
             }
         },
-        # Fix for redis-py compatibility issue with QoS
-        task_acks_late=True,
+        
+        # Disable acknowledgments to prevent QoS tracking
+        task_acks_late=False,
         worker_prefetch_multiplier=1,
-        task_reject_on_worker_lost=True
+        task_reject_on_worker_lost=False,
+        
+        # Optional: Set to True if you don't need task results
+        task_ignore_result=False,
     )
     celery.conf.update(app.config)
 
     return celery
 
+
 # Initialize Celery
 celery = make_celery()
+
 
 # OpenWeatherMap API key
 API_KEY = os.environ.get("API_KEY")
 
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
 
 @celery.task(bind=True, max_retries=3)
 def fetch_weather_data(self, city):
@@ -84,6 +102,7 @@ def fetch_weather_data(self, city):
         # Retry up to 3 times with exponential backoff
         raise self.retry(countdown=60 * (self.request.retries + 1))
 
+
 def check_redis_connection():
     """Check if Redis is available"""
     try:
@@ -94,6 +113,7 @@ def check_redis_connection():
         return True
     except Exception:
         return False
+
 
 @app.route('/health')
 def health_check():
@@ -106,6 +126,7 @@ def health_check():
 
     # Return 200 even if Redis is down - the app itself is healthy
     return jsonify(response), 200
+
 
 @app.route('/')
 def get_weather():
@@ -126,6 +147,7 @@ def get_weather():
             "error": "Service temporarily unavailable",
             "message": "Queue service is not available"
         }), 503
+
 
 @app.route('/status/<task_id>')
 def get_status(task_id):
@@ -148,7 +170,6 @@ def get_status(task_id):
     
     return jsonify({"status": "processing"}), 202
 
+
 if __name__ == '__main__':
     app.run()
-    
-    
