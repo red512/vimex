@@ -14,20 +14,35 @@ app.config['broker_url'] = os.environ.get('CELERY_BROKER_URL', 'redis://localhos
 app.config['result_backend'] = os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 
 def make_celery():
-    """Create Celery instance with lazy configuration"""
+    """Create Celery instance with redis-py compatible configuration"""
     celery = Celery(
-        app.name,
+        'weather_app',
         broker=app.config['broker_url'],
         backend=app.config['result_backend']
     )
 
-    # Simple Celery config - disable QoS
+    # Configuration that works with redis-py 5.x and avoids QoS issues
     celery.conf.update(
+        task_serializer='json',
+        accept_content=['json'],
+        result_serializer='json',
+        timezone='UTC',
+        enable_utc=True,
+        task_track_started=True,
         task_ignore_result=True,
-        worker_prefetch_multiplier=0,  # Disable QoS
-        worker_disable_rate_limits=True
+        worker_hijack_root_logger=False,
+        worker_log_color=False,
+        # Properly disable QoS to avoid hset issues
+        worker_prefetch_multiplier=1,  # Use 1 instead of 0 for better compatibility
+        task_acks_late=False,           # Don't use late acks
+        worker_disable_rate_limits=True,
+        # Additional settings for stability
+        broker_transport_options={
+            'priority_steps': list(range(10)),
+            'sep': ':',
+            'queue_order_strategy': 'priority',
+        }
     )
-    celery.conf.update(app.config)
 
     return celery
 
@@ -134,6 +149,54 @@ def get_status(task_id):
         return jsonify({"status": "failed", "error": result["error"]}), 400
     
     return jsonify({"status": "processing"}), 202
+
+@app.route('/queue/add', methods=['POST'])
+def add_tasks_to_queue():
+    """Add multiple tasks to queue for KEDA testing"""
+    try:
+        data = request.get_json() or {}
+        num_tasks = data.get('num_tasks', 1)
+        city_prefix = data.get('city_prefix', 'TestCity')
+        
+        task_ids = []
+        for i in range(num_tasks):
+            city = f"{city_prefix}_{i+1}"
+            task = fetch_weather_data.delay(city)
+            task_ids.append(task.id)
+            logger.info(f"✅ Queued task {task.id} for city: {city}")
+        
+        return jsonify({
+            "message": f"Successfully queued {num_tasks} tasks",
+            "task_ids": task_ids
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to queue tasks: {str(e)}")
+        return jsonify({"error": "Failed to queue tasks", "details": str(e)}), 500
+
+@app.route('/queue/status')
+def get_queue_status():
+    """Get current queue status for monitoring"""
+    try:
+        import redis
+        r = redis.Redis.from_url(app.config['broker_url'])
+        
+        queue_length = r.llen('celery')
+        
+        return jsonify({
+            "queue_length": queue_length,
+            "queue_name": "celery",
+            "redis_connected": True
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Failed to get queue status: {str(e)}")
+        return jsonify({
+            "queue_length": 0,
+            "queue_name": "celery", 
+            "redis_connected": False,
+            "error": str(e)
+        }), 500
 
 @celery.task(bind=True)
 def task_failure_handler(self, exc, task_id, args, kwargs, einfo):
