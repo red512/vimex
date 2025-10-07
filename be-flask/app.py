@@ -21,7 +21,7 @@ def make_celery():
         backend=app.config['result_backend']
     )
 
-    # Configure Celery
+    # Configure Celery with Redis compatibility settings
     celery.conf.update(
         task_serializer='json',
         accept_content=['json'],
@@ -30,6 +30,20 @@ def make_celery():
         enable_utc=True,
         broker_connection_retry_on_startup=True,
         broker_connection_retry=True,
+        task_acks_late=True,
+        worker_prefetch_multiplier=1,
+        task_reject_on_worker_lost=True,
+        broker_transport_options={
+            'visibility_timeout': 3600,
+            'fanout_prefix': True,
+            'fanout_patterns': True,
+            'sep': ':',
+            'priority_steps': list(range(10)),
+            'queue_order_strategy': 'priority'
+        },
+        task_send_sent_event=False,
+        worker_send_task_events=False,
+        task_track_started=False,
         result_backend_transport_options={
             'retry_policy': {
                 'timeout': 5.0
