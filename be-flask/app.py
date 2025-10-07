@@ -21,17 +21,11 @@ def make_celery():
         backend=app.config['result_backend']
     )
 
-    # Configure Celery with simplified settings
+    # Simple Celery config - disable QoS
     celery.conf.update(
-        task_serializer='json',
-        accept_content=['json'],
-        result_serializer='json',
-        timezone='UTC',
-        enable_utc=True,
         task_ignore_result=True,
-        task_store_errors_even_if_ignored=True,
-        worker_prefetch_multiplier=1,
-        broker_connection_retry_on_startup=True
+        worker_prefetch_multiplier=0,  # Disable QoS
+        worker_disable_rate_limits=True
     )
     celery.conf.update(app.config)
 
@@ -47,7 +41,7 @@ API_KEY = os.environ.get("API_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-@celery.task(bind=True, max_retries=3)
+@celery.task(bind=True, max_retries=3, acks_late=False, ignore_result=True)
 def fetch_weather_data(self, city):
     url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
     
