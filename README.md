@@ -6,6 +6,9 @@
 <img width="1634" alt="image" src="https://github.com/red512/vimex/assets/59205478/0a4b8c01-5583-453d-b74f-fd26990bd7f2">
 
 
+<img width="765" height="402" alt="image" src="https://github.com/user-attachments/assets/0f7a5c58-ff1d-467a-ba50-ef10b0f37789" />
+
+
 ### Prerequisites
 
 Before getting started, make sure you have the following prerequisites set up:
@@ -536,12 +539,5 @@ python test_keda_scaling.py --add-tasks 1000 --duration 15
 python test_keda_scaling.py --clear-queue
 ```
 
-### Contributing
 
-1. Create a feature branch from `main`
-2. Make your changes
-3. Test KEDA scaling if modifying worker configuration
-4. Ensure all tests pass locally
-5. Create a pull request to `main`
-6. CI pipeline will run automatically
-7. After approval and merge, CD pipeline deploys to staging
+<img width="2204" height="1056" alt="image" src="https://github.com/user-attachments/assets/a3def30c-9d2f-4b2b-8bf3-720bfcc69d7d" />
