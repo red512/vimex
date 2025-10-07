@@ -34,7 +34,11 @@ def make_celery():
             'retry_policy': {
                 'timeout': 5.0
             }
-        }
+        },
+        # Fix for redis-py compatibility issue with QoS
+        task_acks_late=True,
+        worker_prefetch_multiplier=1,
+        task_reject_on_worker_lost=True
     )
     celery.conf.update(app.config)
 
