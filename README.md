@@ -1,7 +1,7 @@
 ## VIMEX
 ### Description of the deployed app
 
-> The provided Flask backend sets up a single route at the root URL, uses https://openweathermap.org/api, and allows us to see weather data in New York. The backend utilizes CORS to enable cross-origin requests and includes asynchronous task processing with Celery.
+> A cloud-native Flask application demonstrating Kubernetes deployment with **KEDA autoscaling**, **Argo Rollouts**, and **GitOps**. The backend provides weather data via OpenWeatherMap API with  **Redis-based queue processing** that automatically scales Celery worker pods based on demand. Features include **zero-downtime deployments**, **event-driven autoscaling**, and comprehensive **CI/CD automation**.
 
 <img width="1634" alt="image" src="https://github.com/red512/vimex/assets/59205478/0a4b8c01-5583-453d-b74f-fd26990bd7f2">
 
@@ -12,15 +12,19 @@ Before getting started, make sure you have the following prerequisites set up:
 
 1. **kubectl**: Install `kubectl`, the command-line tool for interacting with Kubernetes cluster.
 
-2. **Helm**: Install Helm, a package manager for Kubernetes, to manage the deployment of Grafana Prometheus, ArgoCD, and Metrics server.
+2. **Helm**: Install Helm, a package manager for Kubernetes, to manage the deployment of Grafana, Prometheus, ArgoCD, KEDA, and Metrics server.
 
 3. **Terraform**: Install Terraform for provisioning and managing infrastructure.
    
 4. **kubeseal CLI**: Install the `kubeseal` CLI tool for encrypting Kubernetes Secrets into SealedSecret resources. You can find installation instructions [here](https://github.com/bitnami-labs/sealed-secrets#installing-kubeseal).
 
-5. **Docker Hub Account**: Required for publishing Docker images.
+5. **KEDA**: Kubernetes Event-driven Autoscaler for Redis queue-based scaling. 
 
-6. **Slack Webhook**: Obtain a URL to send automated CI/CD notifications to Slack.
+6. **Argo Rollouts**: with canary deployment.
+
+7. **Docker Hub Account**: Required for publishing Docker images.
+
+8. **Slack Webhook**: Obtain a URL to send automated CI/CD notifications to Slack.
 
 ### Repository Structure
 
@@ -50,11 +54,23 @@ https://github.com/red512/vimex-gitops
 ```
 .
 ├── README.md
+├── test_keda_scaling.py         # KEDA autoscaling test script
 └── gitops
     └── environments
         ├── staging
         │   ├── apps
+        │   │   └── backend.yaml # ArgoCD Application
         │   └── backend-helm-chart
+        │       ├── Chart.yaml
+        │       ├── values.yaml
+        │       └── templates
+        │           ├── rollout.yaml          # API pods (Argo Rollout)
+        │           ├── rollout-worker.yaml   # Worker pods (Argo Rollout)
+        │           ├── scaling/
+        │           │   └── scaled-object.yaml # KEDA ScaledObject
+        │           ├── service.yaml
+        │           ├── namespace.yaml
+        │           └── sealed-secret.yaml
         └── production
             ├── apps
             └── backend-helm-chart
@@ -75,19 +91,27 @@ https://github.com/red512/vimex-gitops
 
 <img width="1110" alt="image" src="https://github.com/red512/vimex/assets/59205478/75a51295-3229-4691-83b8-db2f061cfac2">
 
-### Application Helm chart overview
+### Application Helm Chart Overview
 
 ```
-.
+backend-helm-chart/
 ├── Chart.yaml
-├── templates
-│   ├── deployment.yaml
-│   ├── hpa.yaml
-│   ├── namespace.yaml
-│   ├── sealed-secret.yaml
-│   └── service.yaml
-└── values.yaml
+├── values.yaml
+├── templates/
+│   ├── namespace.yaml           # Backend namespace
+│   ├── sealed-secret.yaml       # Encrypted API keys
+│   ├── service.yaml            # Backend API service
+│   ├── rollout.yaml            # Argo Rollout for API pods
+│   ├── rollout-worker.yaml     # Argo Rollout for Celery workers
+│   └── scaling/
+│       └── scaled-object.yaml  # KEDA ScaledObject for Redis-based autoscaling
 ```
+
+**Key Components:**
+
+- **Rollouts**: Advanced deployment strategies for both API and worker pods
+- **KEDA Scaling**: Redis queue-based autoscaling for Celery workers  
+- **Sealed Secrets**: Secure API key management with GitOps
 
 ### Deployments
 
@@ -377,18 +401,147 @@ docker build -t flask-app:local .
 docker run -p 5000:5000 -e API_KEY=your_key flask-app:local
 ```
 
+### KEDA Autoscaling & Redis Queue Management
+
+The application implements advanced autoscaling using KEDA (Kubernetes Event-driven Autoscaling) that scales Celery worker pods based on Redis queue length.
+
+#### Architecture Overview
+
+**Component Architecture:**
+- **Backend API Pod**: Flask application serving weather API requests
+- **Worker Pods**: Celery workers processing async tasks via Argo Rollouts
+- **Redis**: Message broker and result backend for Celery tasks
+- **KEDA ScaledObject**: Monitors Redis queue and triggers scaling events
+- **Horizontal Pod Autoscaler (HPA)**: Created by KEDA to manage worker replica scaling
+
+**Scaling Logic:**
+- **Trigger**: Redis queue length > 5 tasks
+- **Scale Down**: Back to 1 pod when queue length < 5
+- **Polling**: Every 10 seconds for responsive scaling
+- **Cooldown**: 30 seconds before scaling down to prevent thrashing
+
+
+#### Testing KEDA Scaling
+
+The project includes a comprehensive test script for validating KEDA scaling behavior:
+
+**Quick Start:**
+```bash
+# Navigate to GitOps repository
+cd vimex-gitops
+
+# Test scaling with 50 real city weather tasks
+python test_keda_scaling.py --add-tasks 50 --duration 5
+
+# Monitor scaling behavior in real-time
+python test_keda_scaling.py --monitor-only --duration 10
+
+# Clear queue before testing
+python test_keda_scaling.py --clear-queue
+```
+
+**Test Script Features:**
+- ✅ **Real City Data**: Uses actual cities (London, Tokyo, NYC) for realistic API calls
+- ✅ **Complete Message Format**: Properly formatted Celery/Kombu messages
+- ✅ **Redis Integration**: Connects via kubectl exec to backend pods
+- ✅ **Scaling Monitoring**: Real-time pod count and queue length tracking
+- ✅ **Load Testing**: Supports 1000+ tasks for sustained scaling tests
+
+**Example Output:**
+```
+🚀 KEDA Redis Queue Scaling Test
+==================================================
+✅ Redis connection verified
+
+📊 Initial State:
+   Queue Length: 0
+   Pod Count: 1
+   KEDA Ready: True
+
+📝 Adding 50 tasks to trigger scaling...
+✅ Queue length (47) exceeds threshold (5)
+   🎯 KEDA should scale up to 2-3 replicas
+
+Time         Queue    Pods   KEDA Ready   Action
+--------------------------------------------------------------------------------
+18:18:38     44       1      True         Should scale UP
+18:18:53     35       2      True         Scaling correctly
+18:19:08     12       3      True         Scaled correctly
+18:19:23     0        1      True         Scaled down
+```
+
+**Advanced Testing:**
+```bash
+# Sustained load testing with 1000 tasks
+python test_keda_scaling.py --add-tasks 1000 --duration 10
+
+# Continuous load to maintain scaling
+while true; do 
+  python test_keda_scaling.py --add-tasks 100
+  sleep 30
+done
+
+# Monitor with real-time updates
+watch -n 2 'kubectl get pods -n backend -l app=worker'
+```
+
+#### Argo Rollouts Integration
+
+Workers are deployed using Argo Rollouts for advanced deployment strategies:
+
+**Rollout Configuration:**
+- **Canary Strategy**: 100% traffic weight for immediate deployment
+- **Health Probes**: `celery inspect ping` for accurate health checking
+- **Solo Pool**: Bypasses Celery QoS issues with Redis compatibility
+- **Resource Limits**: Optimized for efficient task processing
+
+**Worker Configuration:**
+```yaml
+# Celery worker optimized for Redis scaling
+command: ["celery"]
+args:
+  - "-A"
+  - "app.celery"
+  - "worker"
+  - "--concurrency=1"
+  - "--pool=solo"          # Critical for Redis compatibility
+  - "--without-gossip"     # Reduces overhead
+  - "--without-mingle"     # Improves startup time
+```
+
+
+
 ### Monitoring and Observability
 
-- Prometheus for metrics collection
-- Grafana for visualization dashboards
-- Horizontal Pod Autoscaler (HPA) for automatic scaling
-- Health check endpoints for service monitoring
+- **KEDA Metrics**: Queue length, scaling events, and HPA status
+- **Prometheus**: Application metrics and scaling behavior
+- **Grafana**: Real-time dashboards for queue depth and pod scaling
+- **Argo Rollouts**: Deployment health and rollback capabilities
+- **Health Checks**: Celery worker health via `inspect ping` command
+
+### Quick Reference - KEDA Operations
+
+**Testing Autoscaling:**
+```bash
+# Basic scaling test with 50 tasks
+python test_keda_scaling.py --add-tasks 50
+
+# Monitor scaling behavior
+python test_keda_scaling.py --monitor-only --duration 10
+
+# Load test with 1000 tasks
+python test_keda_scaling.py --add-tasks 1000 --duration 15
+
+# Clear queue
+python test_keda_scaling.py --clear-queue
+```
 
 ### Contributing
 
 1. Create a feature branch from `main`
 2. Make your changes
-3. Ensure all tests pass locally
-4. Create a pull request to `main`
-5. CI pipeline will run automatically
-6. After approval and merge, CD pipeline deploys to staging
+3. Test KEDA scaling if modifying worker configuration
+4. Ensure all tests pass locally
+5. Create a pull request to `main`
+6. CI pipeline will run automatically
+7. After approval and merge, CD pipeline deploys to staging
