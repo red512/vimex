@@ -1,0 +1,49 @@
+graph TD
+    subgraph GitHub
+        A[vimex Repository] -->|CI/CD Pipelines| B[GitHub Actions]
+        A2[vimex-gitops Repository] -->|GitOps Updates| C[ArgoCD]
+    end
+
+    subgraph Kubernetes_Cluster
+        subgraph API_Layer
+            D[Flask API Pod]
+        end
+
+        subgraph Worker_Layer
+            E[Celery Worker Pods]
+        end
+
+        subgraph Message_Broker
+            F[Redis]
+        end
+
+        subgraph Autoscaling
+            G[KEDA ScaledObject]
+            H[Horizontal Pod Autoscaler]
+        end
+
+        subgraph Deployment_Management
+            I[Argo Rollouts]
+        end
+    end
+
+    subgraph Monitoring
+        J[Prometheus]
+        K[Grafana]
+    end
+
+    %% Connections
+    B -->|Build & Push Docker Images| C
+    C -->|Sync Helm Charts| D
+    C -->|Sync Helm Charts| E
+    D -->|Send Tasks| F
+    F -->|Queue Tasks| E
+    G -->|Monitor Redis Queue| F
+    G -->|Trigger Scaling| H
+    H -->|Scale Worker Pods| E
+    I -->|Manage Rollouts| D
+    I -->|Manage Rollouts| E
+    J -->|Collect Metrics| D
+    J -->|Collect Metrics| E
+    J -->|Collect Metrics| F
+    K -->|Visualize Metrics| J
