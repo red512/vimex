@@ -1,0 +1,33 @@
+flowchart TB
+    USER[👥 User]
+    API[🌐 Flask API]
+    QUEUE[📋 Redis Queue]
+    RESULTS[💾 Redis Results]
+    WORKER[⚙️ Celery Workers]
+    KEDA[📊 KEDA Autoscaler]
+    EXT[🌤️ Weather API]
+
+    USER -->|POST /weather| API
+    API -->|Add task| QUEUE
+    API -->|Return task_id| USER
+    
+    QUEUE -->|Pull task| WORKER
+    WORKER -->|Call API| EXT
+    EXT -->|Weather data| WORKER
+    WORKER -->|Save result| RESULTS
+    
+    USER -->|GET /result| API
+    API -->|Query result| RESULTS
+    RESULTS -->|Result data| API
+    API -->|Send weather| USER
+    
+    QUEUE -.->|Monitor| KEDA
+    KEDA -.->|Scale| WORKER
+
+    style USER fill:#f3e5f5,stroke:#6a1b9a,stroke-width:3px
+    style API fill:#e1f5fe,stroke:#01579b,stroke-width:3px
+    style QUEUE fill:#ffebee,stroke:#c62828,stroke-width:3px
+    style RESULTS fill:#ffebee,stroke:#c62828,stroke-width:3px
+    style WORKER fill:#fff9c4,stroke:#f57f17,stroke-width:3px
+    style KEDA fill:#e8f5e9,stroke:#2e7d32,stroke-width:3px
+    style EXT fill:#fce4ec,stroke:#880e4f,stroke-width:3px
