@@ -11,7 +11,7 @@ spec:
   source:
     repoURL: https://github.com/red512/vimex-gitops
     targetRevision: HEAD
-    path: gitops/environments/staging/apps
+    path: gitops/apps
   destination:
     server: https://kubernetes.default.svc
   syncPolicy:
