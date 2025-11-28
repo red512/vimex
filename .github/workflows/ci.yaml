@@ -3,7 +3,7 @@ name: CI Pipeline
 on:
   pull_request:
     branches: ['main']  # Run on PRs to main
-    paths: ['be-flask/**']
+    paths: ['be-flask/**', 'terraform/**']
   workflow_dispatch:
 
 jobs:
@@ -184,7 +184,21 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
             VULNS_FOUND=true
           fi
-          
+
+          # Checkov
+          cd ..
+          echo "### 🔒 Checkov (Terraform) Results" >> $GITHUB_STEP_SUMMARY
+          pip install checkov
+          if checkov --framework terraform --directory terraform --quiet --compact; then
+            echo "✅ No security issues found" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Security issues found in Terraform configuration" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            checkov --framework terraform --directory terraform --compact >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            VULNS_FOUND=true
+          fi
+
           echo "has-vulnerabilities=$VULNS_FOUND" >> $GITHUB_OUTPUT
 
   notify:
