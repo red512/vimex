@@ -1,0 +1,274 @@
+# PR-Based Dynamic Environments - Implementation Plan
+
+## Concept Overview
+
+Implement an automated system where opening a Pull Request automatically creates a complete, isolated Kubernetes environment for testing. The environment includes all services (Backend API, Celery Workers, Redis) and runs integration tests. Once the PR is merged or closed, the environment is automatically destroyed to save resources. However, developers can add a special "dev" label to keep the environment alive for debugging purposes.
+
+## How It Works - Step by Step
+
+### When a developer opens a Pull Request:
+1. GitHub Actions workflow detects the new PR
+2. Extracts PR number (e.g., 123) and branch name
+3. Updates a configuration file in the vimex-gitops repository with PR metadata
+4. ArgoCD ApplicationSet controller monitors this configuration file
+5. Detects the new PR entry and automatically creates a new ArgoCD Application
+6. ArgoCD deploys the entire stack to a new isolated namespace (e.g., "pr-123")
+7. Each PR environment gets its own URL like `pr-123.staging.yourdomain.com`
+8. GitHub Actions posts a comment on the PR with the environment URL and access instructions
+
+### Automated Testing:
+1. Once the environment is ready, GitHub Actions runs integration tests
+2. Tests include API endpoint validation, Celery task processing, and KEDA autoscaling
+3. Test results are automatically posted as a comment on the PR
+4. PR status checks are updated (pass/fail)
+
+### The "dev" Label Feature:
+- By default, environments are temporary
+- Developer can add a "dev" label to the PR
+- This tells the system to keep the environment alive even after PR merge/close
+- Useful for debugging, demo purposes, or extended testing
+- Developer must manually delete the environment when done
+
+### Environment Cleanup:
+1. When PR is merged or closed, GitHub Actions checks for the "dev" label
+2. If no "dev" label exists, cleanup workflow triggers
+3. ArgoCD Application is deleted
+4. Kubernetes namespace is removed
+5. All resources (pods, services, LoadBalancers, ingress) are destroyed
+6. DNS records are cleaned up
+7. Confirmation comment is posted on the PR
+
+## Technical Components Needed
+
+### ArgoCD ApplicationSet:
+- A special ArgoCD resource that can create multiple Applications from templates
+- Uses a "list generator" that reads PR metadata from a YAML file
+- Template defines how each PR environment should look
+- Automatically creates namespace, deploys Helm chart with PR-specific values
+- Each environment is isolated with its own resources
+
+### Configuration File (active-prs.yaml):
+Stores metadata for each active PR:
+- PR number
+- Branch name
+- Whether to keep alive (dev label status)
+- Creation timestamp
+
+### GitHub Actions Workflows:
+
+Workflow 1: Create Environment
+- Triggers on PR open/sync
+- Updates active-prs.yaml in gitops repo
+- Commits and pushes changes
+- Waits for ArgoCD to deploy
+- Posts success comment with URLs
+
+Workflow 2: Run Tests
+- Triggers after environment creation
+- Waits for environment to be healthy
+- Runs integration test suite against PR environment
+- Runs KEDA scaling tests
+- Posts test results as PR comment
+
+Workflow 3: Cleanup
+- Triggers on PR close/merge
+- Checks for dev label
+- If no dev label: removes PR from active-prs.yaml
+- Deletes ArgoCD Application
+- Waits for namespace deletion
+- Posts cleanup confirmation
+
+### Helm Chart Modifications:
+- Create a values-pr.yaml file with PR-specific overrides
+- Includes parameterized namespace, image tags, URLs
+- Reduced resource requests for cost savings
+- Optional components can be disabled for PRs
+
+### Resource Isolation:
+- Each PR gets its own Kubernetes namespace
+- NetworkPolicies to isolate traffic between PR environments
+- ResourceQuotas to prevent resource exhaustion
+- Separate Redis instance per PR
+- Independent KEDA ScaledObjects
+
+## Benefits
+
+### For Developers:
+- Instant feedback on changes before merging
+- Full environment for manual testing
+- Can share PR URL with team for review
+- No need to run everything locally
+- Debug mode for troubleshooting
+
+### For Testing:
+- Automated integration testing in real environment
+- Tests run against actual Kubernetes deployment
+- Validates KEDA autoscaling behavior
+- Catches integration issues before production
+- No test environment conflicts between PRs
+
+### For Operations:
+- Cost-effective: environments destroyed automatically
+- No orphaned resources
+- GitOps-native approach
+- Full audit trail in Git history
+- Easy to extend with additional checks
+
+### For Teams:
+- Reduces merge conflicts in test environments
+- Parallel development without blocking
+- Quick iteration cycles
+- Better collaboration with shareable URLs
+
+## Security Considerations
+
+### Network Security:
+- Each PR namespace has NetworkPolicies
+- Only allow ingress from LoadBalancer
+- Only allow egress to kube-system (DNS) and external APIs
+- No cross-namespace communication
+
+### Resource Protection:
+- Set ResourceQuotas per PR namespace
+- Limit CPU, memory, storage, and LoadBalancers
+- Prevent one PR from consuming all cluster resources
+- Set pod limits (e.g., max 10 pods per PR)
+
+### Access Control:
+- PR environments accessible only via specific URLs
+- Optional basic auth for additional security
+- RBAC rules prevent cross-namespace access
+- GitHub token requires minimal permissions
+
+### Secret Management:
+- Use Sealed Secrets for API keys
+- Each PR environment gets copy of sealed secrets
+- No plain-text secrets in Git
+- Secrets deleted with namespace cleanup
+
+## Cost Optimization
+
+### Resource Sizing:
+- Use smaller pod resources for PR environments
+- Single replica by default (no HA needed)
+- Reduce Redis memory limits
+- Use node selectors for spot instances
+
+### Automatic Cleanup:
+- Default behavior: destroy on PR close
+- Set maximum PR environment lifetime (e.g., 7 days)
+- Automated notifications before expiration
+- Scheduled cleanup job for stale environments
+
+### Monitoring:
+- Track number of active PR environments
+- Monitor resource consumption per PR
+- Alert if too many environments exist
+- Dashboard showing PR environment costs
+
+## Implementation Priority
+
+### Phase 1 - Basic Setup:
+1. Create ApplicationSet with simple list generator
+2. Single GitHub Action for environment creation
+3. Manual cleanup process
+4. Test with 1-2 PRs
+
+### Phase 2 - Automation:
+1. Add automated testing workflow
+2. Implement automatic cleanup on PR close
+3. Add PR comments with environment info
+4. Create documentation
+
+### Phase 3 - Advanced Features:
+1. Add "dev" label support
+2. Implement NetworkPolicies and ResourceQuotas
+3. Add monitoring and cost tracking
+4. Create cleanup scripts for stale environments
+
+### Phase 4 - Optimization:
+1. Optimize resource usage
+2. Add caching for faster deployments
+3. Implement progressive rollout strategy
+4. Add performance metrics
+
+## Example User Journey
+
+### Developer Perspective:
+1. I create a branch: feature/new-endpoint
+2. I make code changes and push
+3. I open a PR on GitHub
+4. Within 2 minutes, bot comments: "Environment ready at pr-456.staging.example.com"
+5. I click the URL and test my changes
+6. Automated tests run and pass - shown in PR
+7. I add "dev" label because I want to demo to team tomorrow
+8. Team reviews, I merge PR
+9. Environment stays up because of "dev" label
+10. After demo, I remove "dev" label or manually delete environment
+11. Resources are cleaned up automatically
+
+### CI/CD Flow:
+PR Opened → Create Environment (2 min) → Run Tests (5 min) → Post Results → Ready for Review
+PR Closed → Check Label → No "dev"? → Cleanup (1 min) → Resources Freed
+PR Closed → Check Label → Has "dev"? → Keep Running → Manual Cleanup Later
+
+## Monitoring Queries
+
+### Check Active Environments:
+kubectl get applications -n argo -l pr-environment=true
+kubectl get namespaces -l type=pr-environment
+
+### Resource Usage:
+kubectl top pods --all-namespaces -l pr-environment=true
+kubectl get resourcequotas --all-namespaces
+
+### Cost Tracking:
+Count active PR environments
+Calculate: (num_prs × cost_per_env × hours_active)
+
+## Future Enhancements
+
+- Automatically scale down PR environments during off-hours
+- Add preview comments with screenshots
+- Integrate with Slack for notifications
+- Add performance benchmarking in PR environments
+- Create PR environment templates for different service types
+- Implement blue-green deployments within PR environments
+- Add database seeding with test data
+- Create PR environment analytics dashboard
+
+## File Structure to Create
+
+vimex-gitops/
+├── gitops/
+│   ├── apps/
+│   │   ├── backend-appset.yaml          # ApplicationSet for PR envs
+│   │   └── backend-production.yaml      # Production Application
+│   ├── helm/
+│   │   └── backend-helm-chart/
+│   │       ├── values.yaml              # Base values
+│   │       ├── values-pr.yaml           # PR-specific overrides
+│   │       └── values-production.yaml   # Production values
+│   └── pr-environments/
+│       └── active-prs.yaml              # Metadata for active PRs
+
+vimex/
+├── .github/
+│   └── workflows/
+│       ├── pr-environment-create.yaml   # Create PR env
+│       ├── pr-environment-test.yaml     # Test PR env
+│       └── pr-environment-cleanup.yaml  # Destroy PR env
+└── scripts/
+    └── pr-environment/
+        ├── create.sh
+        ├── test.sh
+        └── cleanup.sh
+
+## Notes
+
+- This feature requires ArgoCD ApplicationSet controller to be installed
+- Ensure cluster has sufficient resources for multiple PR environments
+- Consider implementing rate limiting to prevent abuse
+- Test thoroughly with a single PR before rolling out
+- Document the process for team members
+- Create runbooks for troubleshooting common issues
