@@ -1,0 +1,648 @@
+================================================================================
+MINIKUBE PR PREVIEW ENVIRONMENTS SETUP
+Atlantis (Terraform) + ArgoCD (Kubernetes) + GitHub Integration
+================================================================================
+
+OVERVIEW
+--------
+This setup creates automatic preview environments for GitHub Pull Requests:
+- ArgoCD ApplicationSet: Auto-creates K8s environments per PR (with "preview" label)
+- Atlantis: Terraform automation via PR comments
+- Port-forward: Access services locally via localhost:8080
+- ngrok: Allows GitHub webhooks to reach local Atlantis
+
+ARCHITECTURE
+------------
+GitHub (PR created) 
+    ↓ (webhook via ngrok)
+Atlantis (terraform plan/apply)
+    ↓
+ArgoCD ApplicationSet (detects PR with label)
+    ↓
+Kubernetes (creates namespace + deployment per PR)
+    ↓
+Access: http://pr-123.local:8080
+
+================================================================================
+PREREQUISITES
+================================================================================
+
+✅ Minikube installed and running (Docker driver)
+✅ kubectl installed and configured
+✅ Ingress controller enabled
+✅ GitHub repository with access
+✅ ngrok installed (for webhooks)
+
+Verify:
+-------
+minikube status
+kubectl version
+minikube addons list | grep ingress
+
+================================================================================
+STEP 1: TERMINAL SETUP
+================================================================================
+
+You'll need 3 terminals running simultaneously:
+
+Terminal 1: Port-forward (always running)
+Terminal 2: ngrok (always running for webhooks)
+Terminal 3: Your work terminal
+
+================================================================================
+STEP 2: START PORT-FORWARD (TERMINAL 1)
+================================================================================
+
+# This must ALWAYS be running
+kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80 8443:443
+
+Keep this terminal open!
+This creates: localhost:8080 → Minikube ingress controller
+
+================================================================================
+STEP 3: INSTALL ARGOCD
+================================================================================
+
+# Create namespace
+kubectl create namespace argocd
+
+# Install ArgoCD
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+# Wait for ArgoCD to be ready (2-3 minutes)
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
+
+# Get admin password (save this!)
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+echo
+
+# Add ArgoCD to /etc/hosts
+echo "127.0.0.1 argocd.local" | sudo tee -a /etc/hosts
+
+# Create ArgoCD ingress
+cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server-ingress
+  namespace: argocd
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+spec:
+  rules:
+  - host: argocd.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argocd-server
+            port:
+              number: 443
+EOF
+
+# Test access (in browser):
+# http://argocd.local:8080
+# Login: admin / <password from above>
+
+================================================================================
+STEP 4: CREATE GITHUB TOKEN FOR ARGOCD
+================================================================================
+
+1. Go to: https://github.com/settings/tokens
+2. Click "Generate new token (classic)"
+3. Name: "ArgoCD PR Environments"
+4. Scopes needed:
+   ✅ repo (Full control)
+5. Generate token
+6. Copy the token (starts with ghp_)
+
+# Create secret in Kubernetes
+kubectl create secret generic github-token -n argocd \
+  --from-literal=token=ghp_YOUR_GITHUB_TOKEN_HERE
+
+Replace ghp_YOUR_GITHUB_TOKEN_HERE with your actual token!
+
+================================================================================
+STEP 5: DEPLOY ARGOCD APPLICATIONSET (TAG-BASED)
+================================================================================
+
+# Create ApplicationSet configuration
+cat <<EOF | kubectl apply -f -
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: pr-environments
+  namespace: argocd
+spec:
+  generators:
+  - pullRequest:
+      github:
+        owner: YOUR-GITHUB-ORG
+        repo: YOUR-REPO-NAME
+        tokenRef:
+          secretName: github-token
+          key: token
+        # Only creates environments for PRs with "preview" label
+        labels:
+        - preview
+      requeueAfterSeconds: 300
+  
+  template:
+    metadata:
+      name: 'pr-{{number}}'
+      labels:
+        preview: 'true'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/YOUR-GITHUB-ORG/YOUR-REPO-NAME
+        targetRevision: '{{head_sha}}'
+        path: k8s/  # Path to your Kubernetes manifests
+        helm:
+          parameters:
+          - name: ingress.host
+            value: 'pr-{{number}}.local'
+          - name: image.tag
+            value: '{{head_sha}}'
+          - name: namespace
+            value: 'pr-{{number}}'
+      
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: 'pr-{{number}}'
+      
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+        - CreateNamespace=true
+EOF
+
+IMPORTANT: Replace these values:
+- YOUR-GITHUB-ORG: Your GitHub organization/username
+- YOUR-REPO-NAME: Your repository name
+- path: k8s/ - Path where your Kubernetes manifests are stored
+
+================================================================================
+STEP 6: DEPLOY ATLANTIS
+================================================================================
+
+# Create namespace
+kubectl create namespace atlantis
+
+# Create GitHub token for Atlantis (can be same as ArgoCD token or different)
+# Follow same steps as Step 4 if creating new token
+
+# Create secrets
+kubectl create secret generic atlantis-secrets -n atlantis \
+  --from-literal=github-token=ghp_YOUR_GITHUB_TOKEN \
+  --from-literal=github-user=YOUR-GITHUB-USERNAME \
+  --from-literal=webhook-secret=$(openssl rand -hex 20)
+
+# Save the webhook secret for later!
+kubectl get secret atlantis-secrets -n atlantis -o jsonpath="{.data.webhook-secret}" | base64 -d
+echo
+
+# Deploy Atlantis
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlantis
+  namespace: atlantis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atlantis
+  template:
+    metadata:
+      labels:
+        app: atlantis
+    spec:
+      containers:
+      - name: atlantis
+        image: ghcr.io/runatlantis/atlantis:latest
+        env:
+        - name: ATLANTIS_REPO_ALLOWLIST
+          value: "github.com/YOUR-GITHUB-ORG/YOUR-REPO-NAME"
+        - name: ATLANTIS_GH_USER
+          valueFrom:
+            secretKeyRef:
+              name: atlantis-secrets
+              key: github-user
+        - name: ATLANTIS_GH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: atlantis-secrets
+              key: github-token
+        - name: ATLANTIS_GH_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: atlantis-secrets
+              key: webhook-secret
+        - name: ATLANTIS_ATLANTIS_URL
+          value: "http://atlantis.local:8080"
+        - name: ATLANTIS_PORT
+          value: "4141"
+        ports:
+        - containerPort: 4141
+        volumeMounts:
+        - name: atlantis-data
+          mountPath: /atlantis-data
+      volumes:
+      - name: atlantis-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlantis
+  namespace: atlantis
+spec:
+  ports:
+  - port: 4141
+    targetPort: 4141
+  selector:
+    app: atlantis
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlantis-ingress
+  namespace: atlantis
+spec:
+  rules:
+  - host: atlantis.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: atlantis
+            port:
+              number: 4141
+EOF
+
+# Add Atlantis to /etc/hosts
+echo "127.0.0.1 atlantis.local" | sudo tee -a /etc/hosts
+
+# Verify Atlantis is running
+kubectl get pods -n atlantis
+
+# Test access (in browser):
+# http://atlantis.local:8080
+
+IMPORTANT: Replace these values:
+- YOUR-GITHUB-ORG: Your GitHub organization/username
+- YOUR-REPO-NAME: Your repository name
+- ghp_YOUR_GITHUB_TOKEN: Your actual GitHub token
+- YOUR-GITHUB-USERNAME: Your GitHub username
+
+================================================================================
+STEP 7: SETUP NGROK FOR GITHUB WEBHOOKS (TERMINAL 2)
+================================================================================
+
+# Start ngrok in Terminal 2
+ngrok http 8080
+
+You'll see output like:
+Forwarding: https://abc123.ngrok.io -> http://localhost:8080
+
+COPY THIS URL! You'll need it for GitHub webhook configuration.
+
+Keep this terminal open!
+
+NOTE: Free ngrok URLs change on restart. Paid plan ($10/mo) gives static URLs.
+
+================================================================================
+STEP 8: CONFIGURE GITHUB WEBHOOK
+================================================================================
+
+1. Go to your repository: https://github.com/YOUR-ORG/YOUR-REPO
+2. Click "Settings" → "Webhooks" → "Add webhook"
+3. Configure:
+   
+   Payload URL: https://YOUR-NGROK-URL.ngrok.io/events
+   (Replace YOUR-NGROK-URL with the URL from ngrok)
+   
+   Content type: application/json
+   
+   Secret: <paste the webhook-secret from Step 6>
+   
+   Which events:
+   ✅ Pull requests
+   ✅ Issue comments
+   ✅ Pull request reviews
+   
+4. Click "Add webhook"
+5. Verify: Green checkmark should appear (may take a minute)
+
+================================================================================
+STEP 9: VERIFY SETUP
+================================================================================
+
+# Check all components are running:
+
+# ArgoCD
+kubectl get pods -n argocd
+# All pods should be "Running"
+
+# Atlantis
+kubectl get pods -n atlantis
+# Pod should be "Running"
+
+# Ingress
+kubectl get ingress -A
+# Should show argocd-server-ingress and atlantis-ingress
+
+# Test access:
+# ArgoCD:   http://argocd.local:8080
+# Atlantis: http://atlantis.local:8080
+
+# Check ngrok is forwarding:
+# Visit: http://localhost:4040
+# This shows ngrok dashboard with request history
+
+================================================================================
+STEP 10: TEST THE WORKFLOW
+================================================================================
+
+TEST 1: Create a PR with Preview Environment
+---------------------------------------------
+
+1. Create a new branch in your repo
+2. Make a change (add/modify files in k8s/ directory)
+3. Create a Pull Request
+4. Add label "preview" to the PR
+5. Wait 5 minutes (ArgoCD checks every 5 minutes)
+6. Check ArgoCD: http://argocd.local:8080
+   - You should see a new application: pr-<NUMBER>
+7. Add PR to /etc/hosts:
+   echo "127.0.0.1 pr-<NUMBER>.local" | sudo tee -a /etc/hosts
+8. Access: http://pr-<NUMBER>.local:8080
+
+TEST 2: Use Atlantis for Terraform
+-----------------------------------
+
+1. In your PR, add/modify Terraform files
+2. Comment on PR: atlantis plan
+3. Wait ~30 seconds
+4. Atlantis should comment with terraform plan output
+5. Review the plan
+6. Comment on PR: atlantis apply
+7. Atlantis runs terraform apply
+8. Atlantis comments with results
+
+================================================================================
+COMPLETE WORKFLOW SUMMARY
+================================================================================
+
+Developer Workflow:
+-------------------
+1. Create PR on GitHub
+2. Add "preview" label
+3. Wait 5 minutes → ArgoCD creates environment
+4. Add to /etc/hosts: 127.0.0.1 pr-<NUMBER>.local
+5. Access: http://pr-<NUMBER>.local:8080
+6. For Terraform changes: Comment "atlantis plan/apply"
+7. Close PR → ArgoCD auto-deletes environment
+
+Connection Flow:
+----------------
+GitHub → https://abc123.ngrok.io → localhost:8080 → port-forward → 
+Minikube ingress → Atlantis/ArgoCD services → Pods
+
+================================================================================
+DAILY OPERATIONS
+================================================================================
+
+Starting Your Day:
+------------------
+# Terminal 1
+kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80 8443:443
+
+# Terminal 2
+ngrok http 8080
+
+# Terminal 3 - Your work
+# Update GitHub webhook with new ngrok URL (if it changed)
+
+Stopping:
+---------
+# Terminal 1: Ctrl+C (stop port-forward)
+# Terminal 2: Ctrl+C (stop ngrok)
+# Minikube: minikube stop (optional)
+
+Restarting:
+-----------
+minikube start
+# Then follow "Starting Your Day" steps
+
+================================================================================
+TROUBLESHOOTING
+================================================================================
+
+Issue: Can't access http://atlantis.local:8080
+-----------------------------------------------
+Check:
+1. Is port-forward running? (Terminal 1)
+2. Is Atlantis pod running? kubectl get pods -n atlantis
+3. Is it in /etc/hosts? cat /etc/hosts | grep atlantis
+4. Test direct: curl http://localhost:8080 -H "Host: atlantis.local"
+
+Issue: GitHub webhook not reaching Atlantis
+--------------------------------------------
+Check:
+1. Is ngrok running? (Terminal 2)
+2. Check ngrok dashboard: http://localhost:4040
+3. GitHub webhook shows green checkmark?
+4. Webhook secret matches?
+5. Check Atlantis logs: kubectl logs -n atlantis deployment/atlantis
+
+Issue: ArgoCD not creating PR environments
+-------------------------------------------
+Check:
+1. Does PR have "preview" label?
+2. Wait 5 minutes (ArgoCD polls every 5 minutes)
+3. GitHub token valid? kubectl get secret github-token -n argocd
+4. Check ArgoCD logs: kubectl logs -n argocd deployment/argocd-applicationset-controller
+5. Verify ApplicationSet: kubectl get applicationset -n argocd
+
+Issue: Can't access PR environment
+-----------------------------------
+Check:
+1. Did you add to /etc/hosts? echo "127.0.0.1 pr-123.local" | sudo tee -a /etc/hosts
+2. Is the namespace created? kubectl get namespace | grep pr-
+3. Are pods running? kubectl get pods -n pr-123
+4. Is ingress created? kubectl get ingress -n pr-123
+
+Issue: Port-forward keeps disconnecting
+----------------------------------------
+Solution:
+# Run in background with auto-restart
+while true; do kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80 8443:443; sleep 5; done
+
+================================================================================
+SECURITY NOTES
+================================================================================
+
+✅ Webhook secret protects Atlantis from unauthorized requests
+✅ GitHub token has limited scope (only your repo)
+✅ ngrok only exposes port 8080 (not your entire computer)
+✅ Your laptop files are NOT accessible through ngrok
+✅ Only services with Kubernetes Ingress rules are exposed
+✅ Stop ngrok when not testing (Ctrl+C)
+✅ Monitor ngrok traffic: http://localhost:4040
+
+For production:
+❌ Don't use local Minikube + ngrok
+✅ Deploy to cloud (AWS EKS, GCP GKE, Azure AKS)
+✅ Use proper DNS and SSL certificates
+✅ Use cloud load balancers
+
+================================================================================
+CLEANUP / REMOVAL
+================================================================================
+
+Remove a specific PR environment:
+----------------------------------
+kubectl delete namespace pr-123
+
+Remove Atlantis:
+----------------
+kubectl delete namespace atlantis
+
+Remove ArgoCD:
+--------------
+kubectl delete namespace argocd
+
+Remove everything and start fresh:
+-----------------------------------
+minikube delete
+minikube start
+# Then follow setup from Step 1
+
+Clean /etc/hosts:
+-----------------
+sudo nano /etc/hosts
+# Remove lines with: atlantis.local, argocd.local, pr-*.local
+
+================================================================================
+USEFUL COMMANDS
+================================================================================
+
+# View all namespaces
+kubectl get namespaces
+
+# View all PR environments
+kubectl get namespace | grep pr-
+
+# View all ingresses
+kubectl get ingress -A
+
+# View Atlantis logs
+kubectl logs -n atlantis deployment/atlantis -f
+
+# View ArgoCD ApplicationSet logs
+kubectl logs -n argocd deployment/argocd-applicationset-controller -f
+
+# Check what's listening on port 8080
+lsof -i :8080
+
+# Get ArgoCD admin password again
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+
+# List all ArgoCD applications
+kubectl get applications -n argocd
+
+# Manually sync an ArgoCD application
+kubectl patch application pr-123 -n argocd --type merge -p '{"spec":{"syncPolicy":{"syncOptions":["Prune=true"]}}}'
+
+================================================================================
+CONFIGURATION FILES REFERENCE
+================================================================================
+
+Your repository should have this structure:
+
+your-repo/
+├── k8s/                    # Kubernetes manifests (for ArgoCD)
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   ├── ingress.yaml
+│   └── values.yaml         # If using Helm
+├── terraform/              # Terraform files (for Atlantis)
+│   ├── main.tf
+│   ├── variables.tf
+│   └── atlantis.yaml       # Atlantis config (optional)
+└── README.md
+
+Example k8s/ingress.yaml:
+--------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app-ingress
+spec:
+  rules:
+  - host: {{ .Values.ingress.host }}  # Will be pr-123.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: my-app
+            port:
+              number: 80
+
+================================================================================
+ADDITIONAL RESOURCES
+================================================================================
+
+ArgoCD Documentation:
+https://argo-cd.readthedocs.io/
+
+Atlantis Documentation:
+https://www.runatlantis.io/docs/
+
+ngrok Documentation:
+https://ngrok.com/docs
+
+Minikube Documentation:
+https://minikube.sigs.k8s.io/docs/
+
+================================================================================
+SUPPORT & QUESTIONS
+================================================================================
+
+If you encounter issues:
+
+1. Check logs: kubectl logs -n <namespace> <pod-name>
+2. Check events: kubectl get events -n <namespace>
+3. Verify resources: kubectl get all -n <namespace>
+4. Check ingress: kubectl describe ingress <name> -n <namespace>
+5. Test connectivity: curl http://localhost:8080 -H "Host: test.local"
+
+Common Issues:
+- Port 8080 already in use: Change to 8081 in all commands
+- ngrok URL changes: Update GitHub webhook with new URL
+- ArgoCD not syncing: Check GitHub token permissions
+- Atlantis not responding: Check webhook secret matches
+
+================================================================================
+END OF INSTRUCTIONS
+================================================================================
+
+This setup gives you:
+✅ Automatic PR preview environments
+✅ Terraform automation via PR comments  
+✅ Local development with production-like workflow
+✅ Safe testing before deploying to production
+
+Good luck! 🚀
