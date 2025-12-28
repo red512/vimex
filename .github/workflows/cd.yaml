@@ -4,6 +4,10 @@ on:
   push:
     branches: ['main']
     paths: ['be-flask/**']
+  pull_request:
+    branches: ['main']
+    paths: ['be-flask/**']
+    types: ['opened', 'synchronize', 'reopened', 'labeled']
   workflow_dispatch:
     inputs:
       environment:
@@ -60,41 +64,73 @@ jobs:
           git tag "v$NEW_VERSION"
           git push origin main --tags
 
+  pr-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+    steps:
+      - name: Check if PR should be deployed
+        id: check
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+
+          # Check if PR has 'deploy' label
+          if echo '${{ toJson(github.event.pull_request.labels.*.name) }}' | grep -q '"deploy"'; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "PR #$PR_NUMBER has deploy label - will create preview environment"
+          else
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            echo "PR #$PR_NUMBER does not have deploy label - skipping deployment"
+          fi
+
   build-and-push:
-    needs: version-bump
-    if: always() && (needs.version-bump.result == 'success' || github.event_name == 'workflow_dispatch')
+    needs: [version-bump, pr-check]
+    if: always() && (needs.version-bump.result == 'success' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.pr-check.outputs.should_deploy == 'true'))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ needs.version-bump.outputs.new_version || github.event.inputs.version || 'manual' }}
+      image_tag: ${{ steps.set_version.outputs.image_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      
-      - name: Set version for manual runs
+
+      - name: Set version and tags
         id: set_version
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            # For PRs, use PR-specific tag
+            PR_NUMBER="${{ needs.pr-check.outputs.pr_number }}"
+            IMAGE_TAG="pr-$PR_NUMBER"
+            echo "build_version=pr-$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             if [ -f be-flask/version.txt ]; then
               VERSION=$(cat be-flask/version.txt)
             else
               VERSION="manual-$(date +%Y%m%d-%H%M%S)"
             fi
             echo "build_version=$VERSION" >> $GITHUB_OUTPUT
+            echo "image_tag=v$VERSION" >> $GITHUB_OUTPUT
           else
             echo "build_version=${{ needs.version-bump.outputs.new_version }}" >> $GITHUB_OUTPUT
+            echo "image_tag=v${{ needs.version-bump.outputs.new_version }}" >> $GITHUB_OUTPUT
           fi
           echo "short_sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
-      
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
-      
-      - name: Build and push
+
+      - name: Build and push for main branch
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v5
         with:
           context: be-flask
@@ -102,12 +138,23 @@ jobs:
           push: true
           tags: |
             projectred521/flask-w:latest
-            projectred521/flask-w:v${{ steps.set_version.outputs.build_version }}
+            projectred521/flask-w:${{ steps.set_version.outputs.image_tag }}
+            projectred521/flask-w:${{ steps.set_version.outputs.short_sha }}
+
+      - name: Build and push for PR
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: be-flask
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            projectred521/flask-w:${{ steps.set_version.outputs.image_tag }}
             projectred521/flask-w:${{ steps.set_version.outputs.short_sha }}
 
   update-gitops:
     needs: [version-bump, build-and-push]
-    if: always() && needs.build-and-push.result == 'success'
+    if: always() && needs.build-and-push.result == 'success' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout main repository
@@ -150,7 +197,7 @@ jobs:
           git push origin main
 
   notify:
-    needs: [version-bump, build-and-push, update-gitops]
+    needs: [version-bump, build-and-push, update-gitops, pr-check]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -160,45 +207,92 @@ jobs:
           VERSION_STATUS="${{ needs.version-bump.result }}"
           BUILD_STATUS="${{ needs.build-and-push.result }}"
           GITOPS_STATUS="${{ needs.update-gitops.result }}"
-          
-          # Determine version for display
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          PR_CHECK_STATUS="${{ needs.pr-check.result }}"
+
+          # Determine deployment type and details
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            PR_NUMBER="${{ needs.pr-check.outputs.pr_number }}"
+            SHOULD_DEPLOY="${{ needs.pr-check.outputs.should_deploy }}"
+
+            if [ "$SHOULD_DEPLOY" == "true" ]; then
+              DISPLAY_VERSION="pr-$PR_NUMBER"
+              ENVIRONMENT="PR Preview"
+              PREVIEW_URL="http://pr-$PR_NUMBER.vimex.local"
+
+              if [[ "$BUILD_STATUS" == "success" ]]; then
+                BUILD_LINE="**Docker Build:** ✅ PR image built"
+                GITOPS_LINE="**Preview Environment:** 🔄 ArgoCD will deploy automatically\\n**Preview URL:** <$PREVIEW_URL|pr-$PR_NUMBER.vimex.local>"
+                HEADER="🔍 PR Preview Environment Ready for #$PR_NUMBER"
+                OVERALL_SUCCESS=true
+              else
+                BUILD_LINE="**Docker Build:** ❌ Failed"
+                GITOPS_LINE="**Preview Environment:** ❌ Not available"
+                HEADER="❌ PR Preview Environment Failed for #$PR_NUMBER"
+                OVERALL_SUCCESS=false
+              fi
+              VERSION_LINE="**PR:** #$PR_NUMBER"
+            else
+              HEADER="ℹ️ PR #$PR_NUMBER - No deployment (missing 'deploy' label)"
+              VERSION_LINE="**PR:** #$PR_NUMBER (no deploy label)"
+              BUILD_LINE="**Docker Build:** ⏭️ Skipped"
+              GITOPS_LINE="**Preview Environment:** ⏭️ Skipped"
+              OVERALL_SUCCESS=true
+            fi
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             DISPLAY_VERSION="manual deployment"
             ENVIRONMENT="${{ github.event.inputs.environment }}"
+            VERSION_LINE="**Version:** ✅ $DISPLAY_VERSION"
+
+            if [[ "$BUILD_STATUS" == "success" ]]; then
+              BUILD_LINE="**Docker Build:** ✅ Completed"
+            else
+              BUILD_LINE="**Docker Build:** ❌ Failed"
+            fi
+
+            if [[ "$GITOPS_STATUS" == "success" ]]; then
+              GITOPS_LINE="**GitOps Update:** ✅ $ENVIRONMENT environment updated"
+              HEADER="🚀 Manual deployment successful for ${{ github.repository }}"
+              OVERALL_SUCCESS=true
+            else
+              GITOPS_LINE="**GitOps Update:** ❌ Failed"
+              HEADER="❌ Manual deployment failed for ${{ github.repository }}"
+              OVERALL_SUCCESS=false
+            fi
           else
+            # Main branch push
             DISPLAY_VERSION="v${{ needs.version-bump.outputs.new_version }}"
             ENVIRONMENT="staging"
+
+            if [[ "$VERSION_STATUS" == "success" ]]; then
+              VERSION_LINE="**Version:** ✅ $DISPLAY_VERSION"
+            else
+              VERSION_LINE="**Version:** ❌ Failed"
+            fi
+
+            if [[ "$BUILD_STATUS" == "success" ]]; then
+              BUILD_LINE="**Docker Build:** ✅ Completed"
+            else
+              BUILD_LINE="**Docker Build:** ❌ Failed"
+            fi
+
+            if [[ "$GITOPS_STATUS" == "success" ]]; then
+              GITOPS_LINE="**GitOps Update:** ✅ $ENVIRONMENT environment updated"
+            else
+              GITOPS_LINE="**GitOps Update:** ❌ Failed"
+            fi
+
+            if [[ "$BUILD_STATUS" == "success" && "$GITOPS_STATUS" == "success" ]]; then
+              HEADER="🚀 Deployment successful for ${{ github.repository }} ($DISPLAY_VERSION)"
+              OVERALL_SUCCESS=true
+            else
+              HEADER="❌ Deployment failed for ${{ github.repository }}"
+              OVERALL_SUCCESS=false
+            fi
           fi
-          
-          # Build status lines
-          if [[ "$VERSION_STATUS" == "success" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION_LINE="**Version:** ✅ $DISPLAY_VERSION"
-          else
-            VERSION_LINE="**Version:** ❌ Failed"
-          fi
-          
-          if [[ "$BUILD_STATUS" == "success" ]]; then
-            BUILD_LINE="**Docker Build:** ✅ Completed"
-          else
-            BUILD_LINE="**Docker Build:** ❌ Failed"
-          fi
-          
-          if [[ "$GITOPS_STATUS" == "success" ]]; then
-            GITOPS_LINE="**GitOps Update:** ✅ $ENVIRONMENT environment updated"
-          else
-            GITOPS_LINE="**GitOps Update:** ❌ Failed"
-          fi
-          
-          # Overall status
-          if [[ "$BUILD_STATUS" == "success" && "$GITOPS_STATUS" == "success" ]]; then
-            HEADER="🚀 Deployment successful for ${{ github.repository }} ($DISPLAY_VERSION)"
-          else
-            HEADER="❌ Deployment failed for ${{ github.repository }}"
-          fi
-          
+
           WORKFLOW_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MESSAGE="$HEADER\\n$VERSION_LINE\\n$BUILD_LINE\\n$GITOPS_LINE\\n<$WORKFLOW_URL|View Deployment Details>"
-          
+
           curl -X POST -H 'Content-type: application/json' \
             --data "{\"text\":\"$MESSAGE\"}" \
             ${{ secrets.SLACK_WEBHOOK_URL }}
