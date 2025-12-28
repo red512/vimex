@@ -22,6 +22,8 @@ spec:
         pr-number: '{{number}}'
         branch: '{{branch}}'
         environment: preview
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
     spec:
       project: default
       source:
