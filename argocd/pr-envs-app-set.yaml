@@ -12,12 +12,9 @@ spec:
       github:
         owner: red512
         repo: vimex
-        tokenRef:
-          secretName: github-token
-          key: token
         labels:
         - deploy
-      requeueAfterSeconds: 30
+      requeueAfterSeconds: 120
   template:
     metadata:
       name: 'pr-{{number}}-{{branch}}'
