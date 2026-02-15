@@ -1,0 +1,101 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: pr-environments
+  namespace: argo
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  generators:
+    - pullRequest:
+        github:
+          owner: red512
+          repo: vimex
+          labels:
+            - deploy
+        requeueAfterSeconds: 120
+  syncPolicy:
+    preserveResourcesOnDeletion: false
+  template:
+    metadata:
+      name: pr-{{number}}-{{branch}}
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+      labels:
+        environment: preview
+        pr-number: "{{number}}"
+        branch: "{{branch}}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/red512/vimex-gitops
+        targetRevision: HEAD
+        path: gitops/helm/backend-helm-chart
+        helm:
+          valueFiles:
+            - values.yaml
+          parameters:
+            # Critical: Override namespace to match PR-specific namespace
+            - name: namespace.name
+              value: pr-{{number}}
+            # Image configuration
+            - name: image.tag
+              value: pr-{{number}}
+            # Naming overrides
+            - name: nameOverride
+              value: vimex-pr-{{number}}
+            - name: fullnameOverride
+              value: vimex-pr-{{number}}
+            # Ingress configuration
+            - name: ingress.enabled
+              value: "true"
+            - name: ingress.className
+              value: nginx
+            - name: ingress.annotations.nginx\.ingress\.kubernetes\.io/rewrite-target
+              value: /
+            - name: ingress.hosts[0].host
+              value: pr-{{number}}.vimex.local
+            - name: ingress.hosts[0].paths[0].path
+              value: /
+            - name: ingress.hosts[0].paths[0].pathType
+              value: Prefix
+            # Service configuration
+            - name: service.port
+              value: "5000"
+            # Resource limits for PR environments
+            - name: resources.limits.cpu
+              value: 200m
+            - name: resources.limits.memory
+              value: 256Mi
+            - name: resources.requests.cpu
+              value: 100m
+            - name: resources.requests.memory
+              value: 128Mi
+            # Replica configuration
+            - name: replicaCount
+              value: "1"
+            # Environment variables
+            - name: env[0].name
+              value: ENVIRONMENT
+            - name: env[0].value
+              value: pr-{{number}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: pr-{{number}}
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - Validate=true
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
